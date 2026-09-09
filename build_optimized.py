@@ -75,9 +75,8 @@ def check_requirements():
         if not os.path.exists(file_path):
             missing_files.append(file_path)
     
-    # 아이콘 파일은 후보 중 하나만 존재하면 통과
-    if not pick_existing_icon_path():
-        missing_files.append('static/*.ico (one of: ' + ', '.join(ICON_CANDIDATES) + ')')
+    # The favicon is optional; PyInstaller can use its default icon when the
+    # repository does not carry a binary .ico asset.
 
     if missing_files:
         print("❌ Missing required files:")

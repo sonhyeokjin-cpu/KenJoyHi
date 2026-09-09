@@ -16,57 +16,10 @@ def apply_lowpass_filter(data, cutoff_freq, order, sampling_freq):
         numpy.ndarray: Filtered data
     """
     # 입력 데이터 검증
-    if not isinstance(data, np.ndarray):
-        raise ValueError("Input data must be numpy array")
-    
-    # 데이터 스케일 검증
-    data_mean = np.mean(data)
-    data_std = np.std(data)
-    print(f"Input data stats: mean={data_mean}, std={data_std}")
-    
-    # 정규화된 주파수 계산 (0~1 사이 값)
-    nyquist = sampling_freq / 2
-    normal_cutoff = cutoff_freq / nyquist
-    
-    # 로깅 추가
-    print(f"Filter parameters:")
-    print(f"  Sampling frequency: {sampling_freq} Hz")
-    print(f"  Nyquist frequency: {nyquist} Hz")
-    print(f"  Cutoff frequency: {cutoff_freq} Hz")
-    print(f"  Normalized cutoff: {normal_cutoff}")
-    print(f"  Filter order: {order}")
-    
-    # 필터 계수 계산 (Butterworth 필터)
-    b, a = signal.butter(order, normal_cutoff, btype='low', analog=False)
-    
-    # 필터 응답 확인
-    w, h = signal.freqz(b, a, worN=1024)
-    freq = w * sampling_freq / (2 * np.pi)
-    
-    # 통과대역과 차단대역의 게인 확인
-    passband_mask = freq <= cutoff_freq
-    stopband_mask = freq > cutoff_freq
-    
-    passband_gain = np.mean(np.abs(h[passband_mask]))
-    stopband_gain = np.mean(np.abs(h[stopband_mask]))
-    
-    print(f"Filter response:")
-    print(f"  Passband gain: {passband_gain}")
-    print(f"  Stopband gain: {stopband_gain}")
-    
-    # 필터 적용 (일반 필터링)
-    filtered_data = signal.lfilter(b, a, data)
-    
-    # 출력 데이터 스케일 검증
-    filtered_mean = np.mean(filtered_data)
-    filtered_std = np.std(filtered_data)
-    print(f"Filtered data stats: mean={filtered_mean}, std={filtered_std}")
-    
-    # 데이터 스케일 비교
-    scale_ratio = filtered_std / data_std if data_std != 0 else 0
-    print(f"Data scale ratio (filtered/original): {scale_ratio}")
-    
-    return filtered_data
+    data = _validate_filter_input(data, cutoff_freq, order, sampling_freq)
+    sos = signal.butter(order, cutoff_freq, btype='low', fs=sampling_freq,
+                        output='sos')
+    return signal.sosfilt(sos, data)
 
 def apply_bandpass_filter(data, low_freq, high_freq, order, sampling_freq):
     """
@@ -83,58 +36,30 @@ def apply_bandpass_filter(data, low_freq, high_freq, order, sampling_freq):
         numpy.ndarray: Filtered data
     """
     # 입력 데이터 검증
-    if not isinstance(data, np.ndarray):
-        raise ValueError("Input data must be numpy array")
-    
-    # 데이터 스케일 검증
-    data_mean = np.mean(data)
-    data_std = np.std(data)
-    print(f"Input data stats: mean={data_mean}, std={data_std}")
-    
-    # 정규화된 주파수 계산 (0~1 사이 값)
-    nyquist = sampling_freq / 2
-    low = low_freq / nyquist
-    high = high_freq / nyquist
-    
-    # 로깅 추가
-    print(f"Filter parameters:")
-    print(f"  Sampling frequency: {sampling_freq} Hz")
-    print(f"  Nyquist frequency: {nyquist} Hz")
-    print(f"  Frequency range: {low_freq}-{high_freq} Hz")
-    print(f"  Normalized range: {low}-{high}")
-    print(f"  Filter order: {order}")
-    
-    # 필터 계수 계산 (Butterworth 필터)
-    b, a = signal.butter(order, [low, high], btype='band', analog=False)
-    
-    # 필터 응답 확인
-    w, h = signal.freqz(b, a, worN=1024)
-    freq = w * sampling_freq / (2 * np.pi)
-    
-    # 통과대역과 차단대역의 게인 확인
-    passband_mask = (freq >= low_freq) & (freq <= high_freq)
-    stopband_mask = ~passband_mask
-    
-    passband_gain = np.mean(np.abs(h[passband_mask]))
-    stopband_gain = np.mean(np.abs(h[stopband_mask]))
-    
-    print(f"Filter response:")
-    print(f"  Passband gain: {passband_gain}")
-    print(f"  Stopband gain: {stopband_gain}")
-    
-    # 필터 적용 (일반 필터링)
-    filtered_data = signal.lfilter(b, a, data)
-    
-    # 출력 데이터 스케일 검증
-    filtered_mean = np.mean(filtered_data)
-    filtered_std = np.std(filtered_data)
-    print(f"Filtered data stats: mean={filtered_mean}, std={filtered_std}")
-    
-    # 데이터 스케일 비교
-    scale_ratio = filtered_std / data_std if data_std != 0 else 0
-    print(f"Data scale ratio (filtered/original): {scale_ratio}")
-    
-    return filtered_data
+    data = _validate_filter_input(data, (low_freq, high_freq), order, sampling_freq)
+    if not 0 < low_freq < high_freq < sampling_freq / 2:
+        raise ValueError("0 < low_freq < high_freq < Nyquist is required")
+    sos = signal.butter(order, (low_freq, high_freq), btype='band',
+                        fs=sampling_freq, output='sos')
+    return signal.sosfilt(sos, data)
+
+
+def _validate_filter_input(data, cutoff, order, sampling_freq):
+    data = np.asarray(data, dtype=np.float64)
+    if data.ndim != 1 or data.size == 0:
+        raise ValueError("Input data must be a non-empty one-dimensional array")
+    if not np.isfinite(data).all():
+        raise ValueError("Filter input contains non-finite values")
+    if int(order) != order or order < 1:
+        raise ValueError("Filter order must be a positive integer")
+    if not np.isfinite(sampling_freq) or sampling_freq <= 0:
+        raise ValueError("Sampling frequency must be positive")
+    if isinstance(cutoff, tuple):
+        if not 0 < cutoff[0] < cutoff[1] < sampling_freq / 2:
+            raise ValueError("Cutoff frequencies must lie below Nyquist")
+    elif not 0 < cutoff < sampling_freq / 2:
+        raise ValueError("Cutoff frequency must lie below Nyquist")
+    return data
 
 def apply_moving_average(data, window_size, sampling_freq):
     """
@@ -149,8 +74,10 @@ def apply_moving_average(data, window_size, sampling_freq):
         numpy.ndarray: Filtered data
     """
     # 입력 데이터 검증
-    if not isinstance(data, np.ndarray):
-        raise ValueError("Input data must be numpy array")
+    data = np.asarray(data, dtype=np.float64)
+    window_size = int(window_size)
+    if data.ndim != 1 or data.size == 0 or window_size < 1:
+        raise ValueError("Data must be non-empty 1-D and window_size positive")
     
     # 데이터 스케일 검증
     data_mean = np.mean(data)
@@ -158,7 +85,7 @@ def apply_moving_average(data, window_size, sampling_freq):
     print(f"Input data stats: mean={data_mean}, std={data_std}")
     
     # 이동평균 필터 계수 계산
-    b = np.ones(window_size) / window_size
+    b = np.ones(window_size, dtype=np.float64) / window_size
     a = np.array([1.0])
     
     # 필터 응답 확인
@@ -195,20 +122,17 @@ def apply_rms(data, window_size, sampling_freq):
     Returns:
         numpy.ndarray: Filtered data.
     """
-    if not isinstance(data, np.ndarray):
-        raise ValueError("Input data must be a numpy array.")
-    
-    if window_size <= 0:
+    data = np.asarray(data, dtype=np.float64)
+    window_size = int(window_size)
+    if data.ndim != 1 or data.size == 0 or window_size <= 0:
         raise ValueError("Window size must be positive.")
-
-    # Use pandas for efficient rolling RMS calculation
-    series = pd.Series(data)
-    rms = series.rolling(window=window_size).apply(lambda x: np.sqrt(np.mean(x**2)), raw=True)
-    
-    # The rolling operation introduces NaNs at the beginning. Fill them.
-    rms = rms.fillna(0) 
-    
-    return rms.to_numpy()
+    # Cumulative sums avoid pandas' per-window Python callback and define the
+    # initial partial windows consistently (as in the moving average).
+    squares = np.square(data)
+    cumulative = np.cumsum(np.r_[0.0, squares])
+    counts = np.minimum(np.arange(1, data.size + 1), window_size)
+    sums = cumulative[1:] - cumulative[np.maximum(0, np.arange(data.size) + 1 - window_size)]
+    return np.sqrt(sums / counts)
 
 def get_filter_info(filter_type, params):
     """
@@ -224,7 +148,9 @@ def get_filter_info(filter_type, params):
     # Calculate sampling frequency from time data
     time_data = params.get('time_data', [])
     if len(time_data) >= 2:
-        sampling_freq = 1.0 / (time_data[1] - time_data[0])
+        dt = np.diff(np.asarray(time_data, dtype=float))
+        dt = dt[np.isfinite(dt) & (dt > 0)]
+        sampling_freq = 1.0 / float(np.median(dt)) if dt.size else 512.0
     else:
         sampling_freq = 512.0  # 기본값
     

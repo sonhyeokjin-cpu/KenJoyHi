@@ -33,6 +33,8 @@ def extract_bits(value, lsb, msb, data_format='32bit'):
     try:
         # 데이터 포맷에 따른 최대 비트 수 설정
         max_bits = 32 if data_format == '32bit' else 16
+        if data_format not in ('32bit', '16bit') or not (0 <= lsb < max_bits and 0 <= msb < max_bits):
+            raise ValueError(f"Bit indexes must be in 0..{max_bits - 1}")
         
         # 실제 비트 범위 계산 (사용자 입력 순서와 무관)
         start_bit = min(lsb, msb)
@@ -63,6 +65,22 @@ def extract_bits(value, lsb, msb, data_format='32bit'):
         logger.error(f"Error extracting bits: {str(e)}")
         logger.error(traceback.format_exc())
         raise
+
+
+def extract_bits_array(values, lsb, msb, data_format='32bit'):
+    """Vectorized equivalent of :func:`extract_bits` for large channels."""
+    max_bits = 32 if data_format == '32bit' else 16
+    if data_format not in ('32bit', '16bit') or not (0 <= lsb < max_bits and 0 <= msb < max_bits):
+        raise ValueError(f"Bit indexes must be in 0..{max_bits - 1}")
+    values = np.asarray(values, dtype=np.int64)
+    start, end = min(lsb, msb), max(lsb, msb)
+    width = end - start + 1
+    extracted = (values >> start) & ((1 << width) - 1)
+    if lsb > msb:
+        # Reverse the selected bit order without a Python loop per sample.
+        bits = ((extracted[:, None] >> np.arange(width)) & 1)
+        extracted = (bits << np.arange(width - 1, -1, -1)).sum(axis=1)
+    return extracted
 
 def apply_sign_bit(value, bit_width):
     """
@@ -137,53 +155,30 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
             raise ValueError(f"No data available for source parameter: {source_parameter}")
         
         time_data = np.array(source_data['time'], dtype=np.float64)
-        value_data = np.array(source_data['value'], dtype=np.int64)  # 정수형으로 변환
+        raw_values = np.asarray(source_data['value'], dtype=np.float64)
+        finite_mask = np.isfinite(raw_values)
+        value_data = np.zeros(raw_values.size, dtype=np.int64)
+        value_data[finite_mask] = raw_values[finite_mask].astype(np.int64)
         
         logger.info(f"Source data statistics:")
         logger.info(f"  Time array: min={np.min(time_data)}, max={np.max(time_data)}, len={len(time_data)}")
         logger.info(f"  Value array: min={np.min(value_data)}, max={np.max(value_data)}, mean={np.mean(value_data):.6f}, std={np.std(value_data):.6f}")
         
-        # 각 데이터 포인트에 대해 비트 추출 수행
-        extracted_values = []
         total_points = len(value_data)
-        progress_step = max(1, total_points // 100)  # 100단계로 진행상황 표시
-        
-        logger.info(f"Starting bit extraction for {total_points} data points")
-        
         progress_info = {
             'total_points': total_points,
-            'processed_points': 0,
-            'progress_percentage': 0.0
+            'processed_points': total_points,
+            'progress_percentage': 100.0
         }
-        
-        for i, value in enumerate(value_data):
-            try:
-                # 비트 추출
-                extracted = extract_bits(int(value), lsb, msb, data_format)
-                
-                # 부호 비트 적용 (sign_bit_index가 MSB와 같을 때만, bit width 사용)
-                bit_width = abs(msb - lsb) + 1
-                if sign_bit_index is not None and sign_bit_index == max(lsb, msb):
-                    extracted = apply_sign_bit(extracted, bit_width)
-                
-                # LSB 스케일 적용
-                extracted = apply_lsb_scale(extracted, lsb_scale)
-                
-                extracted_values.append(extracted)
-                
-                # 진행상황 업데이트
-                progress_info['processed_points'] = i + 1
-                progress_info['progress_percentage'] = (i + 1) / total_points * 100
-                
-                # 진행상황 로깅 (100단계마다)
-                if i % progress_step == 0 or i == total_points - 1:
-                    logger.info(f"Bit extraction progress: {progress_info['progress_percentage']:.1f}% ({i + 1}/{total_points})")
-                
-            except Exception as e:
-                logger.error(f"Error processing value {value} at index {i}: {str(e)}")
-                extracted_values.append(0.0)  # 에러 시 0으로 설정
-        
-        extracted_values = np.array(extracted_values, dtype=np.float64)
+        extracted_values = extract_bits_array(value_data, lsb, msb, data_format).astype(np.float64)
+        bit_width = abs(msb - lsb) + 1
+        if sign_bit_index is not None:
+            if sign_bit_index != max(lsb, msb):
+                raise ValueError("sign_bit_index must be the selected MSB")
+            sign = (extracted_values >= (1 << (bit_width - 1)))
+            extracted_values[sign] -= sign.astype(np.int64) * (1 << bit_width)
+        extracted_values *= float(lsb_scale)
+        extracted_values[~finite_mask] = np.nan
         
         # 새로운 파라미터 이름 생성
         if parameter_name:

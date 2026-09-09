@@ -1,10 +1,10 @@
 from flask import Flask, render_template, request, jsonify, send_from_directory
+from werkzeug.utils import secure_filename
 from flask_cors import CORS
 import os
 import logging
 import webbrowser
 from threading import Timer
-import sys
 import sys
 import shutil
 import traceback
@@ -19,9 +19,11 @@ from backend.db import (init_db, get_parameters, get_timeseries_data,
                       delete_time_segment, clear_time_segments, reset_database,
                       save_chart_layout, get_chart_layout, clear_chart_layout,
                       save_parameter_config, load_parameter_config)
+from backend.db import DB_PATH
 from backend.filters import apply_lowpass_filter, apply_bandpass_filter, apply_moving_average, get_filter_info
 from backend.derived import execute_derived_parameter
 from backend.bit_extractor import create_bit_extracted_parameter, get_bit_extractor_info
+from backend.storage import metadata, statistics
 import struct
 import sqlite3
 import re
@@ -140,6 +142,7 @@ def get_backend_module(module_name):
                                   save_chart_layout, get_chart_layout, clear_chart_layout,
                                   save_parameter_config, load_parameter_config)
             _module_cache[module_name] = {
+                'DB_PATH': DB_PATH,
                 'init_db': init_db, 'get_parameters': get_parameters,
                 'get_timeseries_data': get_timeseries_data, 'debug_database': debug_database,
                 'save_timeseries_data': save_timeseries_data, 'cleanup_database': cleanup_database,
@@ -297,8 +300,11 @@ def favicon():
         # 일반 Python 실행의 경우
         static_path = os.path.join(app.root_path, 'static')
     
-    return send_from_directory(static_path,
-                             'WaveLab_V3.0.ico', mimetype='image/vnd.microsoft.icon')
+    icon_name = next((name for name in ('WaveLab_V3.0.ico', 'WaveLab_V3.ico', 'WaveLab_icon.ico')
+                      if os.path.exists(os.path.join(static_path, name))), None)
+    if not icon_name:
+        return ('', 204)
+    return send_from_directory(static_path, icon_name, mimetype='image/vnd.microsoft.icon')
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
@@ -312,7 +318,9 @@ def upload_file():
         return jsonify({'error': 'No selected file'}), 400
     
     # Ensure filename is string
-    filename_str = file.filename
+    filename_str = secure_filename(file.filename)
+    if not filename_str:
+        return jsonify({'error': 'Invalid filename'}), 400
     
     # Get file type (regular or fixed-wing)
     file_type = request.form.get('file_type', 'regular')
@@ -473,7 +481,10 @@ def get_data():
     parameter = request.args.get('parameter')
     start = float(request.args.get('start', -float('inf')))
     end = float(request.args.get('end', float('inf')))
-    resolution = request.args.get('resolution', type=int, default=None)
+    # A chart request without a resolution is an overview request.  Never
+    # materialize millions of raw samples just to draw a screen-sized plot.
+    raw_requested = request.args.get('raw', '').lower() in ('1', 'true', 'yes')
+    resolution = None if raw_requested else request.args.get('resolution', type=int, default=2000)
     
     try:
         logger.info(f"Fetching data for parameter: {parameter}, start: {start}, end: {end}, resolution: {resolution}")
@@ -515,12 +526,19 @@ def apply_filter():
         value_array = np.array(data_ts['value'], dtype=np.float64).copy()
         
         # Calculate sampling frequency
+        finite = np.isfinite(value_array) & np.isfinite(time_array)
+        time_array, value_array = time_array[finite], value_array[finite]
+        if time_array.size < 2:
+            return jsonify({'error': 'At least two finite samples are required'}), 400
         time_diff = np.diff(time_array)
         logger.info(f"Time array stats: min={np.min(time_array)}, max={np.max(time_array)}, len={len(time_array)}")
         logger.info(f"Time differences: min={np.min(time_diff)}, max={np.max(time_diff)}, mean={np.mean(time_diff)}, std={np.std(time_diff)}")
         
         # Calculate sampling frequency from median time difference
-        sampling_freq = 1.0 / np.median(time_diff)
+        positive_dt = time_diff[np.isfinite(time_diff) & (time_diff > 0)]
+        if positive_dt.size == 0:
+            return jsonify({'error': 'Time axis must be strictly increasing'}), 400
+        sampling_freq = 1.0 / np.median(positive_dt)
         logger.info(f"Calculated sampling frequency: {sampling_freq:.2f} Hz")
         
         filtered_data = None
@@ -631,14 +649,33 @@ def apply_filter():
 @app.route('/api/data_count')
 def get_data_count():
     parameter = request.args.get('parameter')
-    start = float(request.args.get('start', 0))
-    end = float(request.args.get('end', 0))
+    start = float(request.args.get('start', '-inf'))
+    end = float(request.args.get('end', 'inf'))
     try:
         db_module = get_backend_module('db')
-        data = db_module['get_timeseries_data'](parameter, start, end)
-        return jsonify({'count': len(data['time'])})
+        info = metadata(db_module['DB_PATH'], parameter)
+        if info['count'] == 0:
+            return jsonify({'count': 0})
+        # Count in a bounded range without reading values.
+        from backend.storage import iter_chunks
+        count = sum(len(t) for t, _ in iter_chunks(db_module['DB_PATH'], parameter, start, end))
+        return jsonify({'count': count})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/statistics')
+def get_statistics():
+    """Exact chunk-wise statistics without materializing the channel."""
+    parameter = request.args.get('parameter')
+    try:
+        if not parameter:
+            return jsonify({'error': 'parameter is required'}), 400
+        start = float(request.args.get('start', '-inf'))
+        end = float(request.args.get('end', 'inf'))
+        return jsonify(statistics(DB_PATH, parameter, start, end))
+    except Exception as e:
+        logger.error(f"Error calculating statistics: {e}")
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/api/derived', methods=['POST'])
 def create_derived_parameter():
@@ -656,11 +693,25 @@ def create_derived_parameter():
         np = get_numpy()
         db_module = get_backend_module('db')
         
+        if not parameters:
+            return jsonify({'error': 'Select at least one input parameter'}), 400
+        reference_time = None
         for param_name in parameters:
             param_data = db_module['get_timeseries_data'](param_name, -np.inf, np.inf)
             if not param_data or not param_data['value']:
                 return jsonify({'error': f'No data available for parameter: {param_name}'}), 400
-            parameter_data[param_name] = param_data['value']
+            source_time = np.asarray(param_data['time'], dtype=float)
+            source_values = np.asarray(param_data['value'], dtype=float)
+            if reference_time is None:
+                reference_time = source_time
+                parameter_data[param_name] = source_values
+            else:
+                finite = np.isfinite(source_values)
+                if finite.sum() < 2:
+                    return jsonify({'error': f'Not enough finite data for {param_name}'}), 400
+                parameter_data[param_name] = np.interp(
+                    reference_time, source_time[finite], source_values[finite],
+                    left=np.nan, right=np.nan)
         
         # Execute the code to generate the derived parameter
         try:
@@ -668,8 +719,10 @@ def create_derived_parameter():
             
             # Save the derived parameter
             db_module = get_backend_module('db')
-            time_data = db_module['get_timeseries_data'](parameters[0], -np.inf, np.inf)['time']
-            db_module['save_timeseries_data'](parameter_name, time_data, result, 0)
+            result = np.asarray(result, dtype=np.float64)
+            if reference_time is None or result.size != reference_time.size:
+                raise ValueError('Derived result does not match the reference time axis')
+            db_module['save_timeseries_data'](parameter_name, reference_time, result, 0)
             
             return jsonify({
                 'message': 'Derived parameter created successfully',
@@ -693,6 +746,7 @@ def save_database():
         file_name = data.get('file_name')
         charts_info = data.get('charts_info', [])  # 차트 정보 추가
         
+        file_name = secure_filename(file_name or '')
         if not file_name or not file_name.endswith('.db'):
             return jsonify({'error': '파일명을 입력하세요(.db 확장자 포함)'}), 400
         
@@ -790,7 +844,8 @@ def export_pcap():
         data = request.get_json(silent=True) or {}
         parameters = data.get('parameters', [])
         format_type = data.get('format', '32bit')
-        filename = data.get('filename', 'exported_data')
+        filename = secure_filename(data.get('filename', 'exported_data')) or 'exported_data'
+        filename = os.path.splitext(filename)[0]
         
         if not parameters:
             return jsonify({'error': 'No parameters selected'}), 400
@@ -1098,86 +1153,64 @@ heartbeat_thread = threading.Thread(target=check_heartbeat, daemon=True)
 heartbeat_thread.start()
 
 def create_pcap_file_with_param_time(data_dict, time_dict, format_type):
+    """Create a valid classic-PCAP stream from independently timed channels.
+
+    The payload is intentionally a small WaveLab record format, but packet
+    timestamps and IP/UDP length fields follow the PCAP/network conventions.
+    Channels are never indexed by another channel's sample positions.
     """
-    각 파라미터별로 그룹 시작 시간(해당 파라미터의 time 배열에서)을 헤더에 포함하여 PCAP 파일 생성
-    """
-    # PCAP 파일 헤더 (24 bytes)
-    pcap_header = struct.pack('<IHHiIII',
-        0xa1b2c3d4, 2, 1, 0, 0, 65535, 1
-    )
-    # 이더넷/IP/UDP 헤더
-    ethernet_header = struct.pack('!6s6sH', b'\x00\x0c\x29\x12\x34\x56', b'\x00\x0c\x29\xab\xcd\xef', 0x0800)
-    ip_header = struct.pack('!BBHHHBBH4s4s', 69, 0, 0, 12345, 0, 64, 17, 0, b'\xc0\xa8\x01\x01', b'\xc0\xa8\x01\x02')
-    udp_header = struct.pack('!HHHH', 12345, 54321, 0, 0)
-    pcap_data = bytearray(pcap_header)
-    # 10분 단위 그룹화
-    # 기준 시간은 모든 파라미터 중 가장 긴 time 배열 사용
-    ref_time = None
-    for t in time_dict.values():
-        if ref_time is None or len(t) > len(ref_time):
-            ref_time = t
-    if not ref_time:
+    np = get_numpy()
+    if format_type not in ('16bit', '32bit'):
+        raise ValueError('format must be 16bit or 32bit')
+    pcap_data = bytearray(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
+    ethernet = struct.pack('!6s6sH', b'\x00\x0c\x29\x12\x34\x56',
+                           b'\x00\x0c\x29\xab\xcd\xef', 0x0800)
+    all_times = [float(t) for values in time_dict.values() for t in values
+                 if isinstance(t, (int, float)) and np.isfinite(t)]
+    if not all_times:
         return bytes(pcap_data)
-    time_window = 600
-    current_time = ref_time[0]
-    time_groups = []
-    current_group = []
-    for i, timestamp in enumerate(ref_time):
-        if timestamp - current_time >= time_window:
-            if current_group:
-                time_groups.append(current_group)
-            current_group = [i]
-            current_time = timestamp
-        else:
-            current_group.append(i)
-    if current_group:
-        time_groups.append(current_group)
-    for group_idx, time_indices in enumerate(time_groups):
-        payload = bytearray()
-        # 16bit/32bit 헤더 추가
-        if format_type == '16bit':
-            payload.extend(struct.pack('BBBB', 0x21, 0x10, 0x08, 0x00))  # 1553
-        else:
-            payload.extend(struct.pack('BBBB', 0xA1, 0x00, 0x00, 0x00))  # Arinc-429
-        # 각 파라미터별 그룹 시작 시간(해당 파라미터의 time 배열에서)
-        for param_name, param_data in data_dict.items():
-            param_name_bytes = param_name.encode('utf-8')
-            payload.extend(struct.pack('<H', len(param_name_bytes)))
-            payload.extend(param_name_bytes)
-            # 파라미터별 그룹 시작 시간
-            param_time_data = time_dict[param_name]
-            param_group_start_time = param_time_data[time_indices[0]] if time_indices else 0
-            payload.extend(struct.pack('<f', param_group_start_time))
-            payload.extend(struct.pack('<I', len(time_indices)))
-            for idx in time_indices:
-                if idx < len(param_data):
-                    value = param_data[idx]
-                    if format_type == '32bit':
-                        payload.extend(struct.pack('<f', float(value)))
-                    else:
-                        scaled_value = int(value * 1000)
-                        payload.extend(struct.pack('<h', scaled_value))
-        packet_ethernet = bytearray(ethernet_header)
-        packet_ip = bytearray(ip_header)
-        packet_udp = bytearray(udp_header)
-        total_length = 20 + 8 + len(payload)
-        packet_ip[2:4] = struct.pack('!H', total_length)
-        udp_length = 8 + len(payload)
-        packet_udp[4:6] = struct.pack('!H', udp_length)
-        ip_checksum = calculate_checksum(packet_ip)
-        packet_ip[10:12] = struct.pack('!H', ip_checksum)
-        packet_data = packet_ethernet + packet_ip + packet_udp + payload
-        # 그룹의 기준 파라미터(ref_time)의 시작 시간으로 타임스탬프
-        group_start_time = ref_time[time_indices[0]] if time_indices else 0
-        packet_timestamp = int(group_start_time * 1000000)
-        packet_header = struct.pack('<IIII',
-            packet_timestamp & 0xFFFFFFFF,
-            (packet_timestamp >> 32) & 0xFFFFFFFF,
-            len(packet_data),
-            len(packet_data)
-        )
-        pcap_data.extend(packet_header)
-        pcap_data.extend(packet_data)
+    window = 600.0
+    first_window = np.floor(min(all_times) / window) * window
+    last_window = max(all_times)
+    value_fmt = '<f' if format_type == '32bit' else '<h'
+    value_size = 4 if format_type == '32bit' else 2
+    for group_start in np.arange(first_window, last_window + window, window):
+        group_end = group_start + window
+        for param_name, raw_values in data_dict.items():
+            times = np.asarray(time_dict.get(param_name, []), dtype=float)
+            values = np.asarray(raw_values, dtype=float)
+            if times.size != values.size:
+                continue
+            mask = np.isfinite(times) & np.isfinite(values) & (times >= group_start) & (times < group_end)
+            indices = np.flatnonzero(mask)
+            if not indices.size:
+                continue
+            name_bytes = str(param_name).encode('utf-8')[:255]
+            # Split large groups so IPv4/UDP and classic PCAP length limits
+            # cannot overflow.
+            max_values = max(1, (60000 - 16 - len(name_bytes)) // value_size)
+            for offset in range(0, indices.size, max_values):
+                selected = indices[offset:offset + max_values]
+                payload = bytearray(struct.pack('BBBB', 0x21 if format_type == '16bit' else 0xA1, 0x10 if format_type == '16bit' else 0, 0x08 if format_type == '16bit' else 0, 0))
+                payload.extend(struct.pack('<H', len(name_bytes)))
+                payload.extend(name_bytes)
+                payload.extend(struct.pack('<dI', float(times[selected[0]]), int(selected.size)))
+                for idx in selected:
+                    value = float(values[idx])
+                    if format_type == '16bit':
+                        value = max(-32768, min(32767, int(round(value * 1000))))
+                    payload.extend(struct.pack(value_fmt, value))
+                ip = bytearray(struct.pack('!BBHHHBBH4s4s', 69, 0, 20 + 8 + len(payload), 12345, 0, 64, 17, 0, b'\xc0\xa8\x01\x01', b'\xc0\xa8\x01\x02'))
+                ip[10:12] = struct.pack('!H', calculate_checksum(ip))
+                udp = struct.pack('!HHHH', 12345, 54321, 8 + len(payload), 0)
+                packet = ethernet + bytes(ip) + udp + payload
+                sec = int(np.floor(float(times[selected[0]])))
+                usec = int(round((float(times[selected[0]]) - sec) * 1_000_000))
+                if usec >= 1_000_000:
+                    sec, usec = sec + 1, usec - 1_000_000
+                pcap_data.extend(struct.pack('<IIII', sec & 0xffffffff, usec,
+                                             len(packet), len(packet)))
+                pcap_data.extend(packet)
     return bytes(pcap_data)
 
 def calculate_checksum(data):
@@ -1208,7 +1241,9 @@ def upload_config_file():
             return jsonify({'error': 'No selected file'}), 400
         
         # 파일 확장자 확인
-        filename = file.filename
+        filename = secure_filename(file.filename)
+        if not filename:
+            return jsonify({'error': 'Invalid filename'}), 400
         file_ext = os.path.splitext(filename)[1].lower()
         if file_ext not in ['.json', '.csv']:
             return jsonify({'error': 'Unsupported file format. Use .json or .csv'}), 400

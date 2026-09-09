@@ -1,7 +1,8 @@
 import scipy.io as sio
 import h5py
 import numpy as np
-from .db import save_timeseries_data
+from .db import save_timeseries_data, DB_PATH
+from .storage import channel_writer
 import logging
 import os
 import traceback
@@ -15,6 +16,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _h5_flat_slice(dataset, start, end):
+    """Read a MATLAB HDF5 vector slice without assuming (N,1) layout."""
+    shape = dataset.shape
+    if len(shape) == 1:
+        return np.asarray(dataset[start:end]).reshape(-1)
+    if len(shape) == 2 and shape[0] == 1:
+        return np.asarray(dataset[:, start:end]).reshape(-1)
+    if len(shape) == 2 and shape[1] == 1:
+        return np.asarray(dataset[start:end, :]).reshape(-1)
+    raise ValueError(f"Expected a vector dataset, got shape {shape}")
 
 def process_file(filepath, file_type='regular'):
     """
@@ -158,7 +171,8 @@ def process_matlab_v7(mat_data, file_type='regular'):
     if global_start_seconds >= global_end_seconds:
         logger.warning(f"Invalid time range: start={global_start_seconds}, end={global_end_seconds}")
     
-    set_global_time(global_start_seconds, global_end_seconds)
+    set_global_time(global_start_seconds, global_end_seconds,
+                    time_basis='epoch_microseconds')
 
     global_start_time = min(first_times)
     for time_var in time_vars:
@@ -191,7 +205,7 @@ def process_matlab_v73(h5_data, file_type='regular'):
     Process MATLAB v7.3 and above format, chunking large variables.
     """
     logger.info(f"Processing MATLAB v7.3 format with file_type: {file_type}")
-    CHUNK_SIZE = 50_000_000
+    CHUNK_SIZE = 250_000
 
     if file_type == 'fixed_wing':
         time_suffix, data_suffix, time_divisor = '_X', '_Y', 1_000_000.0
@@ -209,10 +223,10 @@ def process_matlab_v73(h5_data, file_type='regular'):
     max_end_time = float('-inf')
     for time_var in time_vars:
         time_dataset = h5_data[time_var]
-        if time_dataset.shape[0] > 0:
+        if time_dataset.size > 0:
             # Read only first and last element to find min/max
-            first_val = time_dataset[0, 0]
-            last_val = time_dataset[-1, 0]
+            first_val = _h5_flat_slice(time_dataset, 0, 1)[0]
+            last_val = _h5_flat_slice(time_dataset, time_dataset.size - 1, time_dataset.size)[-1]
             if first_val < global_start_time:
                 global_start_time = first_val
             if last_val > max_end_time:
@@ -221,7 +235,8 @@ def process_matlab_v73(h5_data, file_type='regular'):
     if global_start_time == float('inf'):
         raise ValueError("Could not determine a global start time.")
 
-    set_global_time(global_start_time / time_divisor, max_end_time / time_divisor)
+    set_global_time(global_start_time / time_divisor, max_end_time / time_divisor,
+                    time_basis='epoch_microseconds')
     logger.info(f"Global time determined for v7.3: {global_start_time} to {max_end_time}")
 
     # Pass 2: Process each variable, chunking if necessary
@@ -233,29 +248,19 @@ def process_matlab_v73(h5_data, file_type='regular'):
             logger.info(f"Processing parameter: {param_name}")
             time_dataset = h5_data[time_var]
             value_dataset = h5_data[data_var]
-            total_points = time_dataset.shape[0]
+            total_points = int(time_dataset.size)
 
             try:
-                if total_points <= CHUNK_SIZE:
-                    logger.info(f"Processing {param_name} as a single chunk ({total_points} points).")
-                    time_data = time_dataset[()].flatten()
-                    value_data = value_dataset[()].flatten()
-                    relative_time = (time_data - global_start_time) / time_divisor
-                    save_timeseries_data(param_name, relative_time, value_data, 0)
-                else:
-                    logger.info(f"Parameter {param_name} has {total_points} points, exceeding {CHUNK_SIZE}. Splitting.")
-                    num_chunks = int(np.ceil(total_points / CHUNK_SIZE))
-                    for i in range(num_chunks):
-                        chunk_param_name = f"{param_name}_{i+1}"
-                        start_idx = i * CHUNK_SIZE
-                        end_idx = min((i + 1) * CHUNK_SIZE, total_points)
-                        logger.info(f"Processing chunk {i+1}/{num_chunks} for {param_name} ({start_idx}:{end_idx}) -> {chunk_param_name}")
-                        
-                        time_chunk = time_dataset[start_idx:end_idx].flatten()
-                        value_chunk = value_dataset[start_idx:end_idx].flatten()
-
+                logger.info(f"Streaming {param_name} ({total_points} points) in {CHUNK_SIZE}-sample chunks.")
+                with channel_writer(DB_PATH, param_name) as writer:
+                    for start_idx in range(0, total_points, CHUNK_SIZE):
+                        end_idx = min(start_idx + CHUNK_SIZE, total_points)
+                        time_chunk = _h5_flat_slice(time_dataset, start_idx, end_idx)
+                        value_chunk = _h5_flat_slice(value_dataset, start_idx, end_idx)
+                        if time_chunk.size != value_chunk.size:
+                            raise ValueError(f"{param_name}: time/value lengths differ")
                         relative_time = (time_chunk - global_start_time) / time_divisor
-                        save_timeseries_data(chunk_param_name, relative_time, value_chunk, 0)
+                        writer.append(relative_time, value_chunk)
             except Exception as e:
                 logger.error(f"Failed to process parameter {param_name}: {e}")
                 logger.error(traceback.format_exc())
