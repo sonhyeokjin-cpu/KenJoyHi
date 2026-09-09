@@ -1,6 +1,6 @@
 # PyInstaller specification for the offline WaveLab desktop build.
 from pathlib import Path
-ROOT = Path(SPEC).parent
+ROOT = Path(__file__).resolve().parent
 datas = [
     (str(ROOT / 'templates'), 'templates'),
     (str(ROOT / 'static'), 'static'),
