@@ -1,0 +1,2347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveLab</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='WaveLab_V2.ico') }}?v=2">
+    <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='WaveLab_V2.ico') }}?v=2">
+    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.iife.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.min.css">
+    
+    <!-- ECharts & GridStack -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gridstack@7.2.3/dist/gridstack-all.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/gridstack@7.2.3/dist/gridstack.min.css" rel="stylesheet"/>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='js/uPlot.min.css') }}">
+    <script src="{{ url_for('static', filename='js/uPlot.iife.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/html2canvas.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/monaco-editor/v0.52.2/min/vs/loader.js') }}"></script>
+    <script>
+    // Dancing Script 폰트 로딩 보장
+    if (window.FontFace) {
+        const font400 = new FontFace('Dancing Script', 'url(/static/fonts/DancingScript-Regular.ttf)', {weight: '400'});
+        const font700 = new FontFace('Dancing Script', 'url(/static/fonts/DancingScript-Bold.ttf)', {weight: '700'});
+        font400.load().then(function(loaded) { document.fonts.add(loaded); });
+        font700.load().then(function(loaded) { document.fonts.add(loaded); });
+    }
+    </script>
+    <style>
+        /* 로딩 애니메이션 컨테이너 */
+        .loading-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--bg-color);
+            z-index: 9999;
+            opacity: 1;
+            transition: opacity 0.5s ease-out;
+        }
+
+        .loading-container.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* 로고 애니메이션 */
+        .logo-container {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            margin-bottom: 20px;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: logoAppear 1s ease-out forwards;
+        }
+
+        .logo-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* 슬로건 애니메이션 */
+        .slogan {
+            font-size: 2rem;
+            color: var(--text-color);
+            opacity: 0;
+            transform: translateY(20px);
+            animation: sloganAppear 1s ease-out 0.5s forwards;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        /* 애니메이션 키프레임 */
+        @keyframes logoAppear {
+            0% {
+                opacity: 0;
+                transform: translateY(20px) scale(0.8);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        @keyframes sloganAppear {
+            0% {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 다크모드/라이트모드 변수 */
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #1a1a1a;
+                --text-color: #ffffff;
+            }
+        }
+
+        /* 기존 앱 컨테이너 스타일 수정 */
+        .app-container {
+            opacity: 0;
+            transition: opacity 0.5s ease-out;
+        }
+
+        .app-container.visible {
+            opacity: 1;
+        }
+
+        /* Scale Dialog Styles - Modernized */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.35);
+            z-index: 1000;
+        }
+        .modal-content {
+            background: #fff;
+            margin: 5% auto;
+            padding: 40px 40px 28px 40px;
+            border-radius: 14px;
+            width: 100%;
+            max-width: 520px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 1.5px 6px rgba(0,0,0,0.08);
+            font-family: 'Segoe UI', 'Pretendard', Arial, sans-serif;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.45rem;
+            font-weight: 700;
+            color: #222;
+            letter-spacing: -0.5px;
+        }
+        .close {
+            font-size: 1.6rem;
+            font-weight: 600;
+            color: #888;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .close:hover { color: #2196F3; }
+        .scale-section {
+            margin-bottom: 28px;
+            padding-bottom: 18px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .scale-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        .scale-section h3 {
+            font-size: 1.08rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            margin-top: 0;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 10px;
+        }
+        .input-group label {
+            min-width: 48px;
+            font-size: 1.08rem;
+            color: #2196F3;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .input-row {
+            display: flex;
+            gap: 18px;
+            width: 100%;
+        }
+        .input-row input[type='number'] {
+            flex: 1;
+            padding: 16px 20px;
+            border: 2px solid #e0e7ef;
+            border-radius: 999px;
+            font-size: 1.15rem;
+            background: #f7fafd;
+            transition: border 0.2s, box-shadow 0.2s, background 0.2s;
+            box-shadow: 0 2px 8px rgba(33,150,243,0.04);
+            outline: none;
+            margin-bottom: 2px;
+            color: #222;
+            font-weight: 500;
+        }
+        .input-row input[type='number']:focus {
+            border: 2px solid #2196F3;
+            background: #fff;
+            box-shadow: 0 0 0 3px #2196f340;
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 18px;
+        }
+        .btn {
+            padding: 8px 22px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .btn.primary {
+            background: #2196F3;
+            color: #fff;
+        }
+        .btn.primary:hover,
+        .btn.active:hover {
+            background-color: var(--secondary-color) !important;
+            color: #fff !important;
+        }
+        .btn.secondary {
+            background-color: #f5f5f5;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+        .btn.secondary:hover {
+            background-color: #e0e0e0;
+        }
+        #xMin, #xMax, #yMin, #yMax {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e7ef;
+            border-radius: 999px;
+            font-size: 1.08rem;
+            background: #f7fafd;
+            color: #222;
+            font-weight: 500;
+            box-shadow: 0 1px 4px rgba(33,150,243,0.04);
+            transition: border 0.2s, box-shadow 0.2s, background 0.2s;
+            outline: none;
+            margin-bottom: 2px;
+            letter-spacing: 0.2px;
+        }
+        #xMin:focus, #xMax:focus, #yMin:focus, #yMax:focus {
+            border: 2px solid #2196F3;
+            background: #fff;
+            box-shadow: 0 0 0 3px #2196f340;
+        }
+        .toolbar .btn {
+            position: relative;
+        }
+        .shortcut-badge {
+            position: absolute;
+            left: -22px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #b39ddb;
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: bold;
+            border-radius: 8px;
+            padding: 2px 7px;
+            z-index: 10;
+            box-shadow: 0 1px 4px rgba(179,157,219,0.12);
+            pointer-events: none;
+        }
+        
+        /* Derived Parameter Panel Styles */
+        .derived-panel {
+            position: fixed;
+            top: 0;
+            right: -600px;
+            width: 600px;
+            min-width: 300px;
+            max-width: 80vw;
+            height: 100%;
+            background: white;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+            transition: right 0.3s ease, width 0.3s ease;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .derived-panel.visible {
+            right: 0;
+        }
+        
+        .derived-panel-header {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .derived-panel-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .help-button {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #2196F3;
+            color: white;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+
+        .help-button:hover {
+            background: #1976D2;
+        }
+
+        /* Help Modal Styles */
+        .help-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1100;
+        }
+
+        .help-modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 1000px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .help-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .help-modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .help-modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .function-category {
+            margin-bottom: 30px;
+        }
+
+        .category-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #2196F3;
+            margin-bottom: 15px;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #2196F3;
+        }
+
+        .function-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+
+        .function-table th,
+        .function-table td {
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        .function-table th {
+            background: #f5f5f5;
+            font-weight: 600;
+        }
+
+        .function-table tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+
+        .function-table tr:hover {
+            background: #f0f0f0;
+        }
+
+        .function-name {
+            font-family: monospace;
+            color: #2196F3;
+        }
+
+        .function-description {
+            color: #666;
+        }
+
+        .function-example {
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 5px;
+            border-radius: 3px;
+            color: #333;
+        }
+        
+        .derived-panel-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            overflow: hidden;
+        }
+        
+        .parameter-name-input {
+            margin-bottom: 15px;
+        }
+        
+        .parameter-name-input input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        
+        .monaco-editor-container {
+            flex: 1;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .derived-panel-footer {
+            padding: 15px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        
+        .resize-handle {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 5px;
+            height: 100%;
+            cursor: ew-resize;
+            background: transparent;
+        }
+        
+        .resize-handle:hover {
+            background: var(--primary-color);
+        }
+
+        .time-segment-content {
+            width: 400px;
+            max-width: 90vw;
+            font-size: 1.12rem;
+        }
+
+        .filter-info pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+        }
+        
+        /* PCAP Export Styles */
+        .parameter-selection-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        
+        .select-all-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background-color: #e3f2fd;
+            border-radius: 4px;
+            border: 1px solid #2196F3;
+            font-weight: 600;
+            color: #1976D2;
+        }
+        
+        .select-all-item input[type="checkbox"] {
+            margin-right: 12px;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        
+        .select-all-item label {
+            flex: 1;
+            margin: 0;
+            cursor: pointer;
+            font-weight: 600;
+            color: #1976D2;
+            font-size: 14px;
+        }
+        
+        .parameter-selection-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            margin-bottom: 5px;
+            background-color: white;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        
+        .parameter-selection-item:hover {
+            background-color: #f0f8ff;
+            border-color: #2196F3;
+        }
+        
+        .parameter-selection-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .parameter-selection-item input[type="checkbox"] {
+            margin-right: 12px;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        
+        .parameter-selection-item label {
+            flex: 1;
+            margin: 0;
+            cursor: pointer;
+            font-weight: normal;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .format-selection {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+        
+        .format-selection .radio-label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 18px;
+            font-size: 1.05em;
+        }
+        
+        .radio-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            font-weight: normal;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .radio-label input[type="radio"] {
+            margin-right: 8px;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        
+        .pcap-export-form input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            background-color: white;
+            transition: border-color 0.2s;
+        }
+        
+        .pcap-export-form input[type="text"]:focus {
+            outline: none;
+            border-color: #2196F3;
+            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        
+        .form-actions .btn {
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .form-actions .btn.primary {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+        }
+        
+        .form-actions .btn.primary:hover {
+            background-color: #1976D2;
+        }
+        
+        .form-actions .btn.secondary {
+            background-color: #f5f5f5;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+        
+        .form-actions .btn.secondary:hover {
+            background-color: #e0e0e0;
+        }
+
+        .popup {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .popup-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 85vh;
+            overflow: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .popup-header h3 {
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        /* Progress Bar Styles */
+        .progress-bar-container {
+            position: relative;
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+        
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 12px;
+            font-weight: 600;
+            color: #333;
+            text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+        }
+
+        /* 점멸 애니메이션 */
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+        
+        .btn.processing {
+            animation: blink 1s infinite;
+            pointer-events: none;
+        }
+
+        /* Min/Max 팝업 시인성 개선 */
+        .minmax-info-content {
+            padding: 0;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.4;
+            color: #333;
+        }
+        
+        .minmax-info-content h4 {
+            margin: 0 0 8px 0;
+            color: #2196F3;
+            font-size: 16px;
+            font-weight: 600;
+            border-bottom: 2px solid #e3f2fd;
+            padding-bottom: 4px;
+        }
+        
+        .minmax-info-content p {
+            margin: 4px 0;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .minmax-info-content .parameter-section {
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #2196F3;
+        }
+        
+        .minmax-info-content .parameter-name {
+            font-weight: 600;
+            color: #1976D2;
+            font-size: 15px;
+            margin-bottom: 8px;
+        }
+        
+        .minmax-info-content .value-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 6px 0;
+            padding: 4px 0;
+        }
+        
+        .minmax-info-content .value-label {
+            font-weight: 500;
+            color: #555;
+            min-width: 80px;
+        }
+        
+        .minmax-info-content .value-data {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+            color: #333;
+            background: #fff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            border: 1px solid #ddd;
+        }
+        
+        .minmax-info-content .time-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #eee;
+        }
+
+        /* ... existing styles ... */
+        
+        .plot-controls {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .popup {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .popup-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 85vh;
+            overflow: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .popup-header h3 {
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            color: #666;
+        }
+        
+        .close-btn:hover {
+            color: #000;
+        }
+        
+        .filter-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #f9f9f9;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 2000;
+        }
+        
+        .dropdown-content a {
+            color: black;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+        }
+        
+        .dropdown-content a:hover {
+            background-color: #f1f1f1;
+        }
+        
+        .filter-dropdown:hover .dropdown-content {
+            display: block;
+        }
+        
+        .filter-form {
+            padding: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .filter-info {
+            padding: 20px;
+        }
+        
+        .filter-info pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+        }
+
+        /* Min/Max 팝업 전용 스타일 */
+        #minmax-popup .popup-content {
+            padding: 20px;
+            max-width: 400px;
+        }
+        
+        #minmax-popup .popup-header {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+        }
+
+        .chart-container.dragging {
+            opacity: 0.5;
+            box-shadow: 0 0 12px #2196F3;
+        }
+        .chart-container.drag-over {
+            border: 2px dashed #2196F3;
+            background: #e3f2fd;
+        }
+
+        .bit-extractor-form .form-group label,
+        .bit-extractor-form .form-group input[type="number"],
+        .bit-extractor-form .form-group input[type="text"],
+        .bit-extractor-form .form-group input[type="radio"],
+        .bit-extractor-form .form-group small {
+            font-size: 1.05em;
+        }
+        .bit-extractor-form .form-group input[type="number"],
+        .bit-extractor-form .form-group input[type="text"] {
+            padding: 7px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            margin-right: 6px;
+            box-sizing: border-box;
+        }
+
+        .filter-dropdown:hover .dropdown-content {
+            display: block;
+        }
+        
+        .config-dropdown {
+            position: relative; /* for dropdown positioning */
+        }
+        
+        .config-dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        #file-tab .config-dropdown {
+            width: 100%;
+            margin-top: 10px;
+            display: block;
+            position: relative;
+        }
+
+        /* File tab button styles based on user image */
+        #file-tab .upload-container .btn {
+            background-color: #f5f5f5; /* Light gray */
+            color: #212529; /* Darker gray for better contrast */
+            border: 1px solid #e0e0e0; /* Border to match background */
+            border-left: 5px solid #2196F3; /* Blue tab */
+            width: 100%;
+            text-align: left;
+            padding: 14px 18px; /* Increased padding */
+            border-radius: 4px;
+            font-size: 14px; /* Set font size */
+            font-weight: 600; /* Bolder font */
+            letter-spacing: 0.5px; /* Letter spacing for readability */
+            transition: background-color 0.3s, box-shadow 0.2s; /* Removed transform from transition */
+            justify-content: flex-start;
+            display: flex;
+            align-items: center; /* Vertically center content */
+            height: 45px; /* Fixed height for all buttons */
+        }
+
+        #file-tab .upload-container .btn:hover {
+            background-color: #e9e9e9; /* Slightly darker gray on hover */
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+        }
+        
+        #file-tab .upload-container > button.btn {
+            margin-top: 10px;
+        }
+
+        #file-tab .upload-container > button:nth-of-type(1) {
+            margin-top: 0;
+        }
+
+        .upload-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .config-dropdown {
+            position: relative; /* for dropdown positioning */
+        }
+
+        #current-file {
+            padding: 12px 15px;
+            font-size: 13px;
+            color: #333;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 5px solid #6c757d; /* A neutral gray */
+            display: none; /* Initially hidden */
+            word-break: break-all;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+
+        #upload-status {
+            padding: 12px 15px;
+            font-size: 13px;
+            border-radius: 4px;
+            word-break: break-all;
+            display: none; /* Initially hidden, shown by JS */
+        }
+
+        #upload-status.success {
+            color: #155724; /* Dark green for success text */
+            background-color: #f8f9fa;
+            border-left: 5px solid #28a745; /* Green success border */
+            display: block;
+        }
+
+        #upload-status.error {
+            color: #721c24; /* Dark red for error text */
+            background-color: #f8f9fa;
+            border-left: 5px solid #dc3545; /* Red error border */
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <!-- 로딩 애니메이션 컨테이너 -->
+    <div class="loading-container">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='WaveLab_V2.png') }}" alt="WaveLab Logo">
+        </div>
+        <div class="slogan">Uncover the unseen in your flight data</div>
+    </div>
+
+    <!-- 기존 앱 컨테이너 -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-tabs">
+                <div class="tab active" data-tab="file">
+                    <span class="icon">📂</span> File
+                </div>
+                <div class="tab" data-tab="plot">
+                    Plot
+                </div>
+            </div>
+            
+            <div class="tab-content">
+                <!-- File Tab -->
+                <div class="tab-pane active" id="file-tab">
+                    <div class="upload-container">
+                        <input type="file" id="file-input" accept=".mat,.matlab,.csv,.db" style="display: none;">
+                        <button id="upload-btn" class="btn">Upload file :<br><small>.csv, .mat, .db</small></button>
+                        <button id="upload-fixed-wing-btn" class="btn">Upload file (Fixed-wing)</button>
+                        <div id="current-file"></div>
+                        <div id="upload-status"></div>
+                        <button id="save-db-btn" class="btn">Save Database</button>
+                        <button id="config-btn" class="btn">Configuration</button>
+                    </div>
+                </div>
+                
+                <!-- Plot Tab -->
+                <div class="tab-pane" id="plot-tab">
+                    <!-- Toggle Controls -->
+                    <div class="toggle-controls">
+                        <div class="toggle-item">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="show-description-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Show Description</span>
+                        </div>
+                        <div class="toggle-item">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="fixed-scale-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Fixed Scale</span>
+                        </div>
+                        <div class="toggle-item" style="gap:10px; align-items:center;">
+                            <span class="toggle-label" title="Line transparency for time-series plots">Transparency</span>
+                            <input type="range" id="line-alpha-slider" min="0" max="100" step="1" value="0" style="width:70%; border-radius:999px; appearance:none; height:6px; background:#e0e7ef; outline:none;" />
+                            <span id="line-alpha-value" style="min-width:48px; text-align:center; font-weight:600; color:#1976D2;">0%</span>
+                        </div>
+                    </div>
+                    <div class="parameters-list" id="parameters-list">
+                        <!-- Parameters will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Top Toolbar -->
+            <div class="toolbar">
+                <button id="addChartBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">1</span>Add Chart</button>
+                <button id="scaleBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">2</span>Scale</button>
+                <button id="minMaxBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">3</span>Min/Max</button>
+                <button id="fft-btn" class="btn" title="FFT Analysis (Alt+4)"><span class="shortcut-badge" style="display:none;">4</span>FFT</button>
+                <button id="scatter-btn" class="btn disabled" disabled title="Scatter Plot (Alt+5)"><span class="shortcut-badge" style="display:none;">5</span>Scatter</button>
+                <div class="filter-dropdown">
+                    <button id="filter-btn" class="btn disabled" disabled>Filter</button>
+                    <div class="dropdown-content">
+                        <a href="#" data-filter="lpf">Low-pass Filter (LPF)</a>
+                        <a href="#" data-filter="bpf">Band-pass Filter (BPF)</a>
+                        <a href="#" data-filter="ma">Moving Average</a>
+                        <a href="#" data-filter="rms">RMS</a>
+                    </div>
+                </div>
+                <span id="global-time-info" style="margin-left:auto; font-weight:600; color:#1976D2; font-size:1.05rem;"></span>
+            </div>
+
+            <!-- Plot Area -->
+            <div class="plot-area" id="plot-area" style="display: none;">
+                <!-- Charts will be added here -->
+            </div>
+            
+            <!-- Canvas Area (GridStack) -->
+            <div id="canvas-area" class="grid-stack" style="display: none; flex: 1; width: 100%; overflow-y: auto; padding: 10px; box-sizing: border-box;"></div>
+
+            <!-- File Tab Notepad Area -->
+            <div class="notepad-area" id="notepad-area" style="display: none;">
+                <div class="notepad-split">
+                    <!-- General Notes (Left) -->
+                    <div class="notepad-panel">
+                        <div class="notepad-panel-header">
+                            <h4>General Note</h4>
+                            <small>Persists across program runs</small>
+                        </div>
+                        <textarea id="general-notes-textarea" placeholder="Notes saved automatically to your browser..."></textarea>
+                    </div>
+                    
+                    <!-- Session Notes (Right) -->
+                    <div class="notepad-panel">
+                        <div class="notepad-panel-header">
+                            <h4>Session Note</h4>
+                            <small>Saved with the database</small>
+                        </div>
+                        <textarea id="session-notes-textarea" placeholder="Notes saved automatically with the database..."></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Min/Max Popup -->
+    <div id="minmax-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>Min/Max Values</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div id="minmax-info-text" class="minmax-info-content"></div>
+        </div>
+    </div>
+
+    <!-- FFT Analysis Popup -->
+    <div id="fft-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>FFT Analysis</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div id="fft-chart" style="width: 100%; height: 500px;"></div>
+        </div>
+    </div>
+
+    <!-- Scatter Popup -->
+    <div id="scatter-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h2>Scatter Plot</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div id="scatter-chart" style="width: 100%; height: 500px;"></div>
+        </div>
+    </div>
+
+    <!-- Filter Popup -->
+    <div id="filter-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>Filter Parameters</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="filter-form">
+                <!-- LPF Form -->
+                <div id="lpf-form" class="filter-form-content">
+                    <div class="form-group">
+                        <label for="lpf-cutoff">Cutoff Frequency (Hz):</label>
+                        <input type="number" id="lpf-cutoff" min="0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="lpf-order">Filter Order:</label>
+                        <input type="number" id="lpf-order" min="1" max="10" value="4">
+                    </div>
+                </div>
+                
+                <!-- BPF Form -->
+                <div id="bpf-form" class="filter-form-content" style="display: none;">
+                    <div class="form-group">
+                        <label for="bpf-low">Lower Frequency (Hz):</label>
+                        <input type="number" id="bpf-low" min="0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="bpf-high">Upper Frequency (Hz):</label>
+                        <input type="number" id="bpf-high" min="0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="bpf-order">Filter Order:</label>
+                        <input type="number" id="bpf-order" min="1" max="10" value="4">
+                    </div>
+                </div>
+                
+                <!-- Moving Average Form -->
+                <div id="ma-form" class="filter-form-content" style="display: none;">
+                    <div class="form-group">
+                        <label for="ma-window">Window Size (samples):</label>
+                        <input type="number" id="ma-window" min="1" value="5">
+                    </div>
+                </div>
+                
+                <!-- RMS Form -->
+                <div id="rms-form" class="filter-form-content" style="display: none;">
+                    <div class="form-group">
+                        <label for="rms-window">Window Size (samples):</label>
+                        <input type="number" id="rms-window" min="1" value="5">
+                    </div>
+                </div>
+                
+                <button id="apply-filter" class="btn primary">Apply Filter</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Info Popup -->
+    <div id="filter-info-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>필터 정보</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="filter-info">
+                <div class="filter-info-text-container">
+                    <pre id="filter-info-text"></pre>
+                </div>
+                <div class="filter-response-charts">
+                    <div class="chart-container">
+                        <h4>주파수 응답 (크기)</h4>
+                        <div id="magnitude-chart" style="width: 400px; height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip" style="display: none; position: absolute; background: rgba(0, 0, 0, 0.8); color: white; padding: 5px; border-radius: 3px; font-size: 12px; pointer-events: none;"></div>
+
+    <script>
+        // 폰트 로딩 보장
+        function loadFonts() {
+            const fonts = [
+                { family: 'Dancing Script', weight: 400, style: 'normal', url: '/static/fonts/DancingScript-Regular.ttf' },
+                { family: 'Dancing Script', weight: 700, style: 'normal', url: '/static/fonts/DancingScript-Bold.ttf' }
+            ];
+
+            fonts.forEach(font => {
+                const fontFace = new FontFace(font.family, `url(${font.url})`, {
+                    weight: font.weight,
+                    style: font.style
+                });
+
+                fontFace.load().then(function(loadedFace) {
+                    document.fonts.add(loadedFace);
+                    console.log(`Font loaded: ${font.family} ${font.weight}`);
+                }).catch(function(error) {
+                    console.warn(`Failed to load font: ${font.family} ${font.weight}`, error);
+                });
+            });
+        }
+
+        // 페이지 로드 시 폰트 로딩 시작
+        if (document.fonts && document.fonts.ready) {
+            loadFonts();
+        } else {
+            // 폰트 API가 지원되지 않는 경우 CSS로 대체
+            console.log('Font API not supported, using CSS fallback');
+        }
+
+        // 로딩 애니메이션 처리
+        window.addEventListener('load', function() {
+            const loadingContainer = document.querySelector('.loading-container');
+            const appContainer = document.querySelector('.app-container');
+            
+            if (loadingContainer && appContainer) {
+                // 폰트 로딩 완료 후 애니메이션 시작
+                setTimeout(function() {
+                    loadingContainer.classList.add('fade-out');
+                    appContainer.classList.add('visible');
+                    
+                    setTimeout(function() {
+                        loadingContainer.style.display = 'none';
+                    }, 500);
+                }, 2000); // 2초 대기 후 페이드아웃 시작
+            }
+        });
+
+        // 로딩 애니메이션 처리
+        document.addEventListener('DOMContentLoaded', () => {
+            const loadingContainer = document.querySelector('.loading-container');
+            const appContainer = document.querySelector('.app-container');
+
+            // 2.5초 후에 로딩 화면을 페이드 아웃하고 앱을 표시
+            setTimeout(() => {
+                loadingContainer.classList.add('fade-out');
+                appContainer.classList.add('visible');
+            }, 2500);
+        });
+    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+    <!-- Chart Popup Modal -->
+    <div id="chart-popup" class="popup" style="display:none;">
+      <div class="popup-content">
+        <div class="popup-header">
+          <h3 id="chart-popup-title"></h3>
+          <button class="close-btn" id="chart-popup-close">&times;</button>
+        </div>
+        <div id="chart-popup-plot"></div>
+      </div>
+    </div>
+
+    <!-- Scale Dialog -->
+    <div id="scaleDialog" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Scale Settings</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="scale-section">
+                <div class="input-group">
+                    <label>X-Axis (Selected Charts)</label>
+                    <div class="input-row">
+                        <input type="number" id="xMin" placeholder="Min">
+                        <input type="number" id="xMax" placeholder="Max">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Y-Axis (Selected Charts)</label>
+                    <div class="input-row">
+                        <input type="number" id="yMin" placeholder="Min">
+                        <input type="number" id="yMax" placeholder="Max">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancelScale" class="btn btn-secondary">Cancel</button>
+                <button id="applyScale" class="btn btn-primary">Apply</button>
+            </div>
+        </div>
+    </div>
+    <!-- End Scale Dialog -->
+
+    <!-- PCAP Export Popup -->
+    <div id="pcap-export-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>Export as .pcap</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="pcap-export-form">
+                <div class="form-group">
+                    <label>Select Parameters (Multiple selection available):</label>
+                    <div id="parameter-selection-list" class="parameter-selection-list">
+                        <!-- Select All checkbox will be added here -->
+                        <!-- Parameters will be populated here -->
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Data Format:</label>
+                    <div class="format-selection">
+                        <label class="radio-label">
+                            <input type="radio" name="data-format" value="32bit" checked>
+                            32-bit Format
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="data-format" value="16bit">
+                            16-bit Format
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>File Name:</label>
+                    <input type="text" id="pcap-filename" placeholder="Enter file name (without extension)" value="exported_data">
+                </div>
+                <div class="form-actions">
+                    <button id="cancel-pcap-btn" class="btn secondary">Cancel</button>
+                    <button id="export-pcap-btn" class="btn primary">Export as .pcap</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BIT Extractor Popup -->
+    <div id="bit-extractor-popup" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>BIT Extractor</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="bit-extractor-form">
+                <div class="form-group">
+                    <label>Select Parameter (Single selection):</label>
+                    <div id="bit-parameter-selection-list" class="parameter-selection-list">
+                        <!-- Parameters will be populated here -->
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Data Format:</label>
+                    <div class="format-selection">
+                        <label class="radio-label">
+                            <input type="radio" name="bit-data-format" value="32bit" checked>
+                            32bit (A429)
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="bit-data-format" value="16bit">
+                            16bit (1553B)
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="bit-lsb">LSB:</label>
+                    <input type="number" id="bit-lsb" min="0" max="31" value="0" style="width:60px;">
+                </div>
+                <div class="form-group">
+                    <label for="bit-msb">MSB:</label>
+                    <input type="number" id="bit-msb" min="0" max="31" value="0" style="width:60px;">
+                    <span id="bit-index-hint" style="font-size:0.95em;color:#888;margin-left:8px;">(0~31 for 32bit, 0~15 for 16bit, sign bit 포함)</span>
+                </div>
+                <div class="form-group">
+                    <label for="bit-sign">Sign Bit (optional):</label>
+                    <input type="number" id="bit-sign" min="" max="" placeholder="Leave blank for unsigned" style="width:100px;">
+                </div>
+                <div class="form-group">
+                    <label for="bit-lsb-scale">LSB Scale:</label>
+                    <input type="number" id="bit-lsb-scale" step="any" value="1.0" style="width:120px;">
+                </div>
+                <div class="form-group">
+                    <label for="bit-parameter-name">New Parameter Name:</label>
+                    <input type="text" id="bit-parameter-name" placeholder="Enter parameter name" style="width:100%;">
+                    <small style="color:#888;font-size:0.9em;">Default: [Selected Parameter]_bit[LSB]_[MSB]</small>
+                </div>
+                <div class="form-actions">
+                    <button id="cancel-bit-extractor-btn" class="btn secondary">Cancel</button>
+                    <button id="generate-bit-extractor-btn" class="btn primary">Generate</button>
+                </div>
+                <div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; border-left: 4px solid #2196F3;">
+                    <small style="color: #666; font-size: 0.9em;">
+                        <strong>💡 Tip:</strong> LSB, MSB를 자유롭게 입력할 수 있습니다.<br>
+                        • LSB ≤ MSB: 비트를 순차적으로 추출 (예: LSB=3, MSB=7 → 3,4,5,6,7번 비트)<br>
+                        • LSB > MSB: 비트를 역순으로 추출 (예: LSB=7, MSB=3 → 7,6,5,4,3번 비트를 역순으로)<br>
+                        <span style="color:#1976D2;font-weight:500;">Sign bit 반영 시, MSB Index입력범위에 포함되어야 합니다.</span>
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Canvas Chart Settings Modal -->
+    <div id="canvas-settings-modal" class="popup" style="display: none;">
+        <div class="popup-content" style="max-width: 450px;">
+            <div class="popup-header">
+                <h3>Chart Settings</h3>
+                <button class="close-btn" onclick="document.getElementById('canvas-settings-modal').style.display='none'">&times;</button>
+            </div>
+            <div class="settings-form">
+                <input type="hidden" id="canvas-setting-chart-id">
+                
+                <div class="form-group">
+                    <label style="font-weight:600; color:#2196F3; margin-bottom:8px; display:block;">Interaction</label>
+                    <div style="display: flex; gap: 20px; margin-bottom: 15px;">
+                        <label><input type="checkbox" id="canvas-zoom-x"> Zoom/Pan X</label>
+                        <label><input type="checkbox" id="canvas-zoom-y"> Zoom/Pan Y</label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight:600; color:#2196F3; margin-bottom:8px; display:block;">Legend</label>
+                    <div style="display: flex; gap: 20px; margin-bottom: 10px;">
+                        <label><input type="checkbox" id="canvas-legend-show"> Show</label>
+                        <label><input type="checkbox" id="canvas-legend-scroll"> Scrollable</label>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                        <div>
+                            <label style="font-size:12px; color:#666;">Orientation</label>
+                            <select id="canvas-legend-orient" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; color:#666;">Placement</label>
+                            <select id="canvas-legend-placement" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="inside">Inside Chart</option><option value="outside">Outside Chart</option></select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style="font-size:12px; color:#666;">Position</label>
+                        <div style="display: flex; gap: 10px;">
+                            <select id="canvas-legend-pos-main" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="top">Top</option><option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option></select>
+                            <select id="canvas-legend-pos-align" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="start">Start (Left/Top)</option><option value="center">Center</option><option value="end">End (Right/Bottom)</option></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-actions" style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">
+                    <button class="btn secondary" onclick="document.getElementById('canvas-settings-modal').style.display='none'">Cancel</button>
+                    <button class="btn primary" onclick="applyCanvasSettings()">Apply</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration Editor Popup -->
+    <div id="config-editor-popup" class="popup" style="display: none;">
+        <div class="popup-content config-editor-modal">
+            <div class="popup-header">
+                <h3>Configuration Editor</h3>
+                <button class="close-btn" id="config-editor-close">&times;</button>
+            </div>
+            <div class="config-editor-content">
+                <!-- Config Load Options -->
+                <div id="config-load-options" class="config-load-section">
+                    <div class="config-load-header">
+                        <h4>Configuration Source</h4>
+                        <p>Choose how to load your configuration</p>
+                    </div>
+                    <div class="config-load-buttons">
+                        <button id="load-existing-config" class="config-btn config-btn-primary">
+                            <span class="config-btn-icon">📁</span>
+                            <span class="config-btn-text">Load Existing Config</span>
+                        </button>
+                        <button id="create-new-config" class="config-btn config-btn-secondary">
+                            <span class="config-btn-icon">🆕</span>
+                            <span class="config-btn-text">Edit Current Config</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Hidden file input for direct file selection -->
+                        <input type="file" id="config-file-input" accept=".json,.csv" style="display: none;">
+
+                <!-- Configuration Table -->
+                <div id="config-table-section" class="config-section" style="display: none;">
+                    <div class="config-table-header">
+                        <div class="config-table-title">
+                            <h4>Parameter Configuration</h4>
+                            <p>Edit parameter settings and limits</p>
+                        </div>
+                        <div class="config-table-actions">
+                            <button id="add-config-row" class="action-btn action-btn-neutral">
+                                <span class="action-btn-icon">➕</span>
+                                Add Row
+                            </button>
+                            <button id="export-config-csv" class="action-btn action-btn-neutral">
+                                <span class="action-btn-icon">📊</span>
+                                Export CSV
+                            </button>
+                            <button id="import-config-csv" class="action-btn action-btn-neutral">
+                                <span class="action-btn-icon">📥</span>
+                                Import CSV
+                            </button>
+                        </div>
+                    </div>
+                    <div class="config-table-container">
+                        <div class="spreadsheet-header">
+                            <div class="spreadsheet-toolbar">
+                                <!-- Delete Row, Copy, Paste 버튼 제거 -->
+                                <span class="spreadsheet-status" id="spreadsheet-status">Ready</span>
+                            </div>
+                        </div>
+                        <div class="spreadsheet-wrapper">
+                            <table id="config-table" class="spreadsheet-table">
+                                <thead>
+                                    <tr>
+                                        <!-- <th class="checkbox-header">
+                                            <input type="checkbox" id="select-all-config" title="Select All">
+                                        </th> -->
+                                        <th>Parameter Name</th>
+                                        <th>Description</th>
+                                        <th>Type</th>
+                                        <th>Formula</th>
+                                        <th>Custom (.py)</th>
+                                        <th>Lo</th>
+                                        <th>Hi</th>
+                                        <th data-line-header="1">Line1<br><div class="line-color-bar" id="line1-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                        <th data-line-header="2">Line2<br><div class="line-color-bar" id="line2-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                        <th data-line-header="3">Line3<br><div class="line-color-bar" id="line3-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                        <th data-line-header="4">Line4<br><div class="line-color-bar" id="line4-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                        <th data-line-header="5">Line5<br><div class="line-color-bar" id="line5-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                        <th data-line-header="6">Line6<br><div class="line-color-bar" id="line6-color-bar" style="height:4px;margin-top:2px;background-color:#ddd;"></div></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="config-table-body">
+                                    <!-- Rows will be dynamically added here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div id="config-actions" class="config-section" style="display: none;">
+                    <div class="config-action-buttons">
+                        <button id="save-config-file" class="action-btn action-btn-primary">
+                            <span class="action-btn-icon">💾</span>
+                            Save Config File
+                        </button>
+                        <button id="apply-config" class="action-btn action-btn-success">
+                            <span class="action-btn-icon">✅</span>
+                            Apply Config
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Derived Parameter Panel -->
+    <div id="derived-panel" class="derived-panel">
+        <div class="resize-handle"></div>
+        <div class="derived-panel-header">
+            <div class="derived-panel-title">
+                Derived Parameter
+                <button class="help-button" id="derived-help-btn">?</button>
+            </div>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="derived-panel-content">
+            <div class="parameter-name-input">
+                <input type="text" id="parameter-name" placeholder="Enter parameter name">
+            </div>
+            <div id="monaco-editor" class="monaco-editor-container"></div>
+        </div>
+        <div class="derived-panel-footer">
+            <button id="save-code" class="btn secondary">Save Code</button>
+            <button id="load-code" class="btn secondary">Load Code</button>
+            <button id="generate-parameter" class="btn primary">Generate</button>
+            <input type="file" id="code-file-input" accept=".py" style="display: none;">
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="help-modal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h2 class="help-modal-title">Derived Parameter Functions Reference</h2>
+                <button class="help-modal-close">&times;</button>
+            </div>
+            <div id="help-content">
+                <!-- Content will be dynamically populated -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Monaco Editor
+        require.config({
+            paths: {
+                'vs': "{{ url_for('static', filename='js/monaco-editor/v0.52.2/min/vs') }}"
+            }
+        });
+        require(['vs/editor/editor.main'], function() {
+            const editor = monaco.editor.create(document.getElementById('monaco-editor'), {
+                value: '# Enter your Python code here\n# Use available parameters and functions\n# Assign the result to the "result" variable\n\nresult = None',
+                language: 'python',
+                theme: 'vs',
+                automaticLayout: true,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                fontSize: 14,
+                lineNumbers: 'on',
+                roundedSelection: false,
+                scrollbar: {
+                    vertical: 'visible',
+                    horizontal: 'visible',
+                    useShadows: false,
+                    verticalScrollbarSize: 10,
+                    horizontalScrollbarSize: 10
+                }
+            });
+            
+            // Make editor instance globally available
+            window.monacoEditor = editor;
+        });
+        
+        // Derived Parameter Panel Functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const derivedPanel = document.getElementById('derived-panel');
+            const closeBtn = derivedPanel.querySelector('.close-btn');
+            const generateBtn = document.getElementById('generate-parameter');
+            const saveCodeBtn = document.getElementById('save-code');
+            const loadCodeBtn = document.getElementById('load-code');
+            const codeFileInput = document.getElementById('code-file-input');
+            const parameterNameInput = document.getElementById('parameter-name');
+            const resizeHandle = derivedPanel.querySelector('.resize-handle');
+            
+            // Show panel
+            window.showDerivedPanel = function() {
+                derivedPanel.classList.add('visible');
+            };
+            
+            // Hide panel
+            closeBtn.addEventListener('click', function() {
+                derivedPanel.classList.remove('visible');
+                // Reset panel width when closing
+                derivedPanel.style.width = '600px';
+            });
+            
+            // Save Code functionality
+            saveCodeBtn.addEventListener('click', function() {
+                const code = window.monacoEditor.getValue();
+                const parameterName = parameterNameInput.value.trim() || 'derived_parameter';
+                
+                // Create a blob with the code
+                const blob = new Blob([code], { type: 'text/plain' });
+                
+                // Create a download link
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `${parameterName}.py`;
+                
+                // Trigger download
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Clean up
+                URL.revokeObjectURL(link.href);
+            });
+            
+            // Load Code functionality
+            loadCodeBtn.addEventListener('click', function() {
+                codeFileInput.click();
+            });
+            
+            codeFileInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const code = e.target.result;
+                        window.monacoEditor.setValue(code);
+                        
+                        // Set parameter name from filename (without .py extension)
+                        const fileName = file.name.replace('.py', '');
+                        parameterNameInput.value = fileName;
+                    };
+                    reader.readAsText(file);
+                }
+                // Reset file input
+                codeFileInput.value = '';
+            });
+            
+            // Resize panel
+            let isResizing = false;
+            let startX;
+            let startWidth;
+            
+            resizeHandle.addEventListener('mousedown', function(e) {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = parseInt(getComputedStyle(derivedPanel).width);
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+            });
+            
+            function handleMouseMove(e) {
+                if (!isResizing) return;
+                const width = startWidth - (e.clientX - startX);
+                if (width > 300 && width < window.innerWidth - 100) {
+                    derivedPanel.style.width = width + 'px';
+                }
+            }
+            
+            function handleMouseUp() {
+                isResizing = false;
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            }
+        });
+
+        // Help Modal Functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const helpBtn = document.getElementById('derived-help-btn');
+            const helpModal = document.getElementById('help-modal');
+            const helpModalClose = helpModal.querySelector('.help-modal-close');
+            const helpContent = document.getElementById('help-content');
+
+            // Function categories and their descriptions
+            const functionCategories = {
+                'Basic Operators': {
+                    description: 'Basic arithmetic and comparison operators',
+                    functions: {
+                        'add': { description: 'Add two numbers', example: 'add(x, y)' },
+                        'sub': { description: 'Subtract y from x', example: 'sub(x, y)' },
+                        'mul': { description: 'Multiply two numbers', example: 'mul(x, y)' },
+                        'truediv': { description: 'Divide x by y', example: 'truediv(x, y)' },
+                        'floordiv': { description: 'Integer division of x by y', example: 'floordiv(x, y)' },
+                        'mod': { description: 'Modulo operation', example: 'mod(x, y)' },
+                        'pow': { description: 'x raised to power y', example: 'pow(x, y)' },
+                        'neg': { description: 'Negate x', example: 'neg(x)' },
+                        'pos': { description: 'Positive x', example: 'pos(x)' },
+                        'abs': { description: 'Absolute value of x', example: 'abs(x)' },
+                        'round': { description: 'Round x to nearest integer', example: 'round(x)' }
+                    }
+                },
+                'Bitwise Operators': {
+                    description: 'Bit manipulation operators',
+                    functions: {
+                        'and_': { description: 'Bitwise AND operation', example: 'and_(x, y)' },
+                        'or_': { description: 'Bitwise OR operation', example: 'or_(x, y)' },
+                        'xor': { description: 'Bitwise XOR operation', example: 'xor(x, y)' },
+                        'invert': { description: 'Bitwise NOT operation', example: 'invert(x)' },
+                        'lshift': { description: 'Left shift x by y bits', example: 'lshift(x, y)' },
+                        'rshift': { description: 'Right shift x by y bits', example: 'rshift(x, y)' }
+                    }
+                },
+                'Comparison Operators': {
+                    description: 'Comparison and logical operators',
+                    functions: {
+                        'eq': { description: 'Equal to', example: 'eq(x, y)' },
+                        'ne': { description: 'Not equal to', example: 'ne(x, y)' },
+                        'lt': { description: 'Less than', example: 'lt(x, y)' },
+                        'le': { description: 'Less than or equal to', example: 'le(x, y)' },
+                        'gt': { description: 'Greater than', example: 'gt(x, y)' },
+                        'ge': { description: 'Greater than or equal to', example: 'ge(x, y)' }
+                    }
+                },
+                'Mathematical Functions': {
+                    description: 'Mathematical and trigonometric functions',
+                    functions: {
+                        'mean': { description: 'Calculate mean of array', example: 'mean(x)' },
+                        'std': { description: 'Calculate standard deviation', example: 'std(x)' },
+                        'sqrt': { description: 'Square root of x', example: 'sqrt(x)' },
+                        'diff': { description: 'Calculate differences between consecutive elements', example: 'diff(x)' },
+                        'log': { description: 'Natural logarithm of x', example: 'log(x)' },
+                        'log10': { description: 'Base-10 logarithm of x', example: 'log10(x)' },
+                        'log2': { description: 'Base-2 logarithm of x', example: 'log2(x)' },
+                        'exp': { description: 'e raised to power x', example: 'exp(x)' },
+                        'sin': { description: 'Sine of x (in radians)', example: 'sin(x)' },
+                        'cos': { description: 'Cosine of x (in radians)', example: 'cos(x)' },
+                        'tan': { description: 'Tangent of x (in radians)', example: 'tan(x)' },
+                        'arcsin': { description: 'Inverse sine of x', example: 'arcsin(x)' },
+                        'arccos': { description: 'Inverse cosine of x', example: 'arccos(x)' },
+                        'arctan': { description: 'Inverse tangent of x', example: 'arctan(x)' },
+                        'sinh': { description: 'Hyperbolic sine of x', example: 'sinh(x)' },
+                        'cosh': { description: 'Hyperbolic cosine of x', example: 'cosh(x)' },
+                        'tanh': { description: 'Hyperbolic tangent of x', example: 'tanh(x)' },
+                        'deg2rad': { description: 'Convert degrees to radians', example: 'deg2rad(x)' },
+                        'rad2deg': { description: 'Convert radians to degrees', example: 'rad2deg(x)' },
+                        'cumsum': { description: 'Cumulative sum of array elements', example: 'cumsum(x)' },
+                        'cumprod': { description: 'Cumulative product of array elements', example: 'cumprod(x)' },
+                        'clip': { description: 'Clip values to range [min, max]', example: 'clip(x, min, max)' }
+                    }
+                },
+                'Bitwise Operations': {
+                    description: 'Bit manipulation functions',
+                    functions: {
+                        'bitwise_and': { description: 'Bitwise AND operation', example: 'bitwise_and(x, y)' },
+                        'bitwise_or': { description: 'Bitwise OR operation', example: 'bitwise_or(x, y)' },
+                        'bitwise_xor': { description: 'Bitwise XOR operation', example: 'bitwise_xor(x, y)' },
+                        'bitwise_not': { description: 'Bitwise NOT operation', example: 'bitwise_not(x)' },
+                        'left_shift': { description: 'Left shift x by y bits', example: 'left_shift(x, y)' },
+                        'right_shift': { description: 'Right shift x by y bits', example: 'right_shift(x, y)' },
+                        'bit_count': { description: 'Count number of set bits', example: 'bit_count(x)' },
+                        'is_power_of_2': { description: 'Check if x is a power of 2', example: 'is_power_of_2(x)' },
+                        'next_power_of_2': { description: 'Find next power of 2 greater than x', example: 'next_power_of_2(x)' }
+                    }
+                },
+                'Signal Processing': {
+                    description: 'Signal processing and analysis functions',
+                    functions: {
+                        'butter_lowpass': { description: 'Design Butterworth lowpass filter', example: 'butter_lowpass(cutoff, fs, order)' },
+                        'moving_average': { description: 'Calculate moving average with window size w', example: 'moving_average(x, w)' },
+                        'bit_extract': { description: 'Extract specific bit from value', example: 'bit_extract(x, bit)' },
+                        'detect_blips': { description: 'Detect sudden changes above threshold', example: 'detect_blips(x, threshold)' },
+                        'generate_blip_series': { description: 'Generate series of blip events', example: 'generate_blip_series(x, threshold)' },
+                        'segment_by_blip': { description: 'Split array into segments at blips', example: 'segment_by_blip(x, blips)' },
+                        'compute_dynamic_load': { description: 'Calculate dynamic load from segments', example: 'compute_dynamic_load(segments)' },
+                        'compute_fft': { description: 'Compute FFT magnitude spectrum', example: 'compute_fft(x)' },
+                        'remove_n_rev': { description: 'Remove n revolutions from signal', example: 'remove_n_rev(x, n)' },
+                        'saturation_clip': { description: 'Clip values to range with saturation', example: 'saturation_clip(x, min_val, max_val)' },
+                        'remove_offset': { description: 'Remove DC offset from signal', example: 'remove_offset(x)' },
+                        'integration': { description: 'Integrate signal with time step', example: 'integration(x, dt)' },
+                        'derivative': { description: 'Calculate derivative with time step', example: 'derivative(x, dt)' },
+                        'resample': { description: 'Resample signal to new time points', example: 'resample(x, old_t, new_t)' },
+                        'fft_peak': { description: 'Find peak frequency in FFT', example: 'fft_peak(x)' }
+                    }
+                },
+                'Binary Operations': {
+                    description: 'Binary data processing functions',
+                    functions: {
+                        'extract_bits': { description: 'Extract range of bits', example: 'extract_bits(x, start, end)' },
+                        'check_parity': { description: 'Check parity of value', example: 'check_parity(x)' },
+                        'bcd_to_int': { description: 'Convert BCD to integer', example: 'bcd_to_int(x)' },
+                        'gray_to_binary': { description: 'Convert Gray code to binary', example: 'gray_to_binary(x)' },
+                        'mil1553_is_rt_to_bc': { description: 'Check MIL-STD-1553 RT to BC bit', example: 'mil1553_is_rt_to_bc(x)' },
+                        'mil1553_subaddress': { description: 'Extract MIL-STD-1553 subaddress', example: 'mil1553_subaddress(x)' },
+                        'mil1553_word_count': { description: 'Extract MIL-STD-1553 word count', example: 'mil1553_word_count(x)' },
+                        'arinc_label': { description: 'Extract ARINC 429 label', example: 'arinc_label(x)' },
+                        'arinc_sdi': { description: 'Extract ARINC 429 SDI', example: 'arinc_sdi(x)' },
+                        'arinc_data': { description: 'Extract ARINC 429 data', example: 'arinc_data(x)' },
+                        'arinc_ssm': { description: 'Extract ARINC 429 SSM', example: 'arinc_ssm(x)' }
+                    }
+                },
+                'Statistical Functions': {
+                    description: 'Statistical analysis functions',
+                    functions: {
+                        'rms': { description: 'Calculate root mean square', example: 'rms(x)' },
+                        'moving_std': { description: 'Calculate moving standard deviation', example: 'moving_std(x, w)' },
+                        'z_score': { description: 'Calculate z-score', example: 'z_score(x)' },
+                        'normalize': { description: 'Normalize values to [0,1] range', example: 'normalize(x)' },
+                        'clip_outliers': { description: 'Clip outliers based on standard deviation', example: 'clip_outliers(x, n_std)' },
+                        'threshold_crossing': { description: 'Detect threshold crossings', example: 'threshold_crossing(x, threshold)' },
+                        'state_duration': { description: 'Calculate state durations', example: 'state_duration(x)' },
+                        'dwell_time_above': { description: 'Calculate time above threshold', example: 'dwell_time_above(x, threshold)' },
+                        'peak_to_peak': { description: 'Calculate peak-to-peak value', example: 'peak_to_peak(x)' },
+                        'zero_crossings': { description: 'Count zero crossings', example: 'zero_crossings(x)' },
+                        'signal_energy': { description: 'Calculate signal energy', example: 'signal_energy(x)' },
+                        'crest_factor': { description: 'Calculate crest factor', example: 'crest_factor(x)' },
+                        'mean_abs': { description: 'Calculate mean absolute value', example: 'mean_abs(x)' }
+                    }
+                },
+                'Array Operations': {
+                    description: 'Array manipulation functions',
+                    functions: {
+                        'rolling_sum': { description: 'Calculate rolling sum', example: 'rolling_sum(x, w)' },
+                        'moving_max': { description: 'Calculate moving maximum', example: 'moving_max(x, w)' },
+                        'moving_min': { description: 'Calculate moving minimum', example: 'moving_min(x, w)' },
+                        'interp1': { description: '1D interpolation', example: 'interp1(x, xp, fp)' },
+                        'scale': { description: 'Scale values by factor', example: 'scale(x, factor)' },
+                        'sign': { description: 'Return sign of values', example: 'sign(x)' },
+                        'round_to': { description: 'Round to specified decimals', example: 'round_to(x, decimals)' },
+                        'modulo': { description: 'Calculate modulo', example: 'modulo(x, y)' },
+                        'where': { description: 'Conditional array selection', example: 'where(condition, x, y)' },
+                        'if_else': { description: 'Conditional selection', example: 'if_else(condition, x, y)' }
+                    }
+                },
+                'Logical Operations': {
+                    description: 'Logical and comparison functions',
+                    functions: {
+                        'flag_if_above': { description: 'Flag values above threshold', example: 'flag_if_above(x, threshold)' },
+                        'flag_if_between': { description: 'Flag values between range', example: 'flag_if_between(x, min_val, max_val)' },
+                        'logical_and': { description: 'Logical AND operation', example: 'logical_and(x, y)' },
+                        'logical_or': { description: 'Logical OR operation', example: 'logical_or(x, y)' },
+                        'logical_not': { description: 'Logical NOT operation', example: 'logical_not(x)' },
+                        'logical_xor': { description: 'Logical XOR operation', example: 'logical_xor(x, y)' },
+                        'all_true': { description: 'Check if all values are true', example: 'all_true(x)' },
+                        'any_true': { description: 'Check if any value is true', example: 'any_true(x)' },
+                        'in_range': { description: 'Check if values are in range', example: 'in_range(x, min_val, max_val)' },
+                        'between': { description: 'Check if values are between range', example: 'between(x, min_val, max_val)' }
+                    }
+                },
+                'Number System Conversions': {
+                    description: 'Number system conversion functions',
+                    functions: {
+                        'bin_to_dec': { description: 'Convert binary to decimal', example: 'bin_to_dec(x)' },
+                        'bin_to_hex': { description: 'Convert binary to hexadecimal', example: 'bin_to_hex(x)' },
+                        'hex_to_bin': { description: 'Convert hexadecimal to binary', example: 'hex_to_bin(x)' },
+                        'dec_to_bin': { description: 'Convert decimal to binary', example: 'dec_to_bin(x)' },
+                        'dec_to_hex': { description: 'Convert decimal to hexadecimal', example: 'dec_to_hex(x)' }
+                    }
+                },
+                'Advanced Signal Processing': {
+                    description: 'Advanced signal processing functions',
+                    functions: {
+                        'butter': { description: 'Design Butterworth filter', example: 'butter(N, Wn)' },
+                        'filtfilt': { description: 'Zero-phase filtering', example: 'filtfilt(b, a, x)' },
+                        'lfilter': { description: 'Filter data with IIR/FIR filter', example: 'lfilter(b, a, x)' },
+                        'fft': { description: 'Compute FFT', example: 'fft(x)' },
+                        'fftfreq': { description: 'Compute FFT frequencies', example: 'fftfreq(n, d)' },
+                        'second_derivative': { description: 'Calculate second derivative', example: 'second_derivative(x, dt)' },
+                        'lookup1d': { description: '1D lookup table', example: 'lookup1d(x, table)' },
+                        'lookup1d_safe': { description: 'Safe 1D lookup table', example: 'lookup1d_safe(x, table)' },
+                        'is_constant': { description: 'Check if signal is constant', example: 'is_constant(x)' },
+                        'detect_spikes': { description: 'Detect spikes in signal', example: 'detect_spikes(x, threshold)' },
+                        'nan_to_num': { description: 'Replace NaN with number', example: 'nan_to_num(x)' },
+                        'is_nan': { description: 'Check for NaN values', example: 'is_nan(x)' },
+                        'sort_indices': { description: 'Get sorted indices', example: 'sort_indices(x)' },
+                        'rank': { description: 'Get rank of values', example: 'rank(x)' },
+                        'moving_argmax': { description: 'Moving argmax', example: 'moving_argmax(x, w)' },
+                        'moving_argmin': { description: 'Moving argmin', example: 'moving_argmin(x, w)' },
+                        'time_shift': { description: 'Shift signal in time', example: 'time_shift(x, shift)' },
+                        'lagged_diff': { description: 'Calculate lagged differences', example: 'lagged_diff(x, lag)' },
+                        'delay_detector': { description: 'Detect delay between signals', example: 'delay_detector(x, y)' }
+                    }
+                },
+                'Time Series Operations': {
+                    description: 'Time series manipulation and analysis functions',
+                    functions: {
+                        'reindex': { description: 'Reindex data to new index', example: 'reindex(x, new_index)' },
+                        'ffill': { description: 'Forward fill missing values', example: 'ffill(x)' },
+                        'bfill': { description: 'Backward fill missing values', example: 'bfill(x)' },
+                        'interpolate': { description: 'Interpolate missing values', example: 'interpolate(x)' },
+                        'fillna': { description: 'Fill missing values with specified value', example: 'fillna(x, value)' },
+                        'asfreq': { description: 'Convert time series to specified frequency', example: 'asfreq(x, freq)' },
+                        'resample': { description: 'Resample time series data', example: 'resample(x, rule)' },
+                        'merge_asof': { description: 'Merge time series using asof join', example: 'merge_asof(x, y)' },
+                        'merge_ordered': { description: 'Merge time series using ordered join', example: 'merge_ordered(x, y)' },
+                        'align': { description: 'Align two time series', example: 'align(x, y)' },
+                        'shift': { description: 'Shift time series by periods', example: 'shift(x, periods)' },
+                        'diff': { description: 'Calculate difference between periods', example: 'diff(x, periods)' },
+                        'pct_change': { description: 'Calculate percentage change', example: 'pct_change(x, periods)' },
+                        'rolling': { description: 'Calculate rolling window statistics', example: 'rolling(x, window)' },
+                        'expanding': { description: 'Calculate expanding window statistics', example: 'expanding(x)' },
+                        'ewm': { description: 'Calculate exponentially weighted mean', example: 'ewm(x, span)' }
+                    }
+                }
+            };
+
+            // Generate help content
+            function generateHelpContent() {
+                let content = '';
+                // Add new section for global module access and user-defined functions
+                content += `
+                    <div class="function-category">
+                        <h3 class="category-title">Global Modules & User Functions</h3>
+                        <p>
+                            <b>All functions from <code>numpy</code> (<code>np</code>), <code>pandas</code> (<code>pd</code>), <code>scipy.signal</code> (<code>signal</code>), <code>scipy.fft</code> (<code>fft</code>) are available.</b><br>
+                            You can use any function as <code>np.function(...)</code>, <code>pd.function(...)</code>, <code>signal.function(...)</code>, <code>fft.function(...)</code>.<br>
+                            <b>You can also define your own functions using <code>def myfunc(...):</code> syntax.</b>
+                        </p>
+                        <table class="function-table">
+                            <thead>
+                                <tr><th>Usage</th><th>Description</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>np.mean(x)</code></td><td>Use any numpy function</td></tr>
+                                <tr><td><code>pd.Series(x).rolling(5).mean()</code></td><td>Use any pandas function or method</td></tr>
+                                <tr><td><code>signal.butter(4, 0.2)</code></td><td>Use any scipy.signal function</td></tr>
+                                <tr><td><code>fft.fft(x)</code></td><td>Use any scipy.fft function</td></tr>
+                                <tr><td><code>def myfunc(x):\n    return x**2\nresult = myfunc(x)</code></td><td>Define and use your own function</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                for (const [category, info] of Object.entries(functionCategories)) {
+                    content += `
+                        <div class="function-category">
+                            <h3 class="category-title">${category}</h3>
+                            <p>${info.description}</p>
+                            <table class="function-table">
+                                <thead>
+                                    <tr>
+                                        <th>Function</th>
+                                        <th>Description</th>
+                                        <th>Example</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                    `;
+                    
+                    for (const [funcName, funcInfo] of Object.entries(info.functions)) {
+                        content += `
+                            <tr>
+                                <td><span class="function-name">${funcName}</span></td>
+                                <td class="function-description">${funcInfo.description}</td>
+                                <td><code class="function-example">${funcInfo.example}</code></td>
+                            </tr>
+                        `;
+                    }
+                    
+                    content += `
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                }
+                
+                helpContent.innerHTML = content;
+            }
+
+            // Show help modal
+            helpBtn.addEventListener('click', function() {
+                generateHelpContent();
+                helpModal.style.display = 'block';
+            });
+
+            // Close help modal
+            helpModalClose.addEventListener('click', function() {
+                helpModal.style.display = 'none';
+            });
+
+            // Close modal when clicking outside
+            window.addEventListener('click', function(event) {
+                if (event.target === helpModal) {
+                    helpModal.style.display = 'none';
+                }
+            });
+        });
+
+        // 페이지 언로드 이벤트 처리
+        let isPageRefreshing = false;
+        let isPageClosing = false;
+        let pageLoadTime = Date.now();
+        let hasUserInteracted = false;
+        let shutdownRequestSent = false;
+        let visibilityHiddenTime = null;
+
+        // 사용자 상호작용 감지
+        document.addEventListener('click', function() {
+            hasUserInteracted = true;
+        });
+
+        document.addEventListener('keydown', function() {
+            hasUserInteracted = true;
+        });
+
+        // 페이지 새로고침 감지 (단순화)
+        window.addEventListener('beforeunload', function(e) {
+            console.log('beforeunload event triggered');
+            console.log('clientY:', e.clientY, 'hasUserInteracted:', hasUserInteracted);
+            
+            // 단순하게 clientY 값으로만 판단
+            if (e.clientY < 0) {
+                isPageClosing = true;
+                console.log('Page is being closed');
+            } else {
+                isPageRefreshing = true;
+                console.log('Page is being refreshed');
+            }
+        });
+
+        // pagehide 이벤트로 추가 감지
+        window.addEventListener('pagehide', function(e) {
+            console.log('pagehide event triggered');
+            console.log('persisted:', e.persisted);
+            
+            // persisted가 false이면 페이지가 완전히 닫히는 것
+            if (!e.persisted && isPageClosing && !shutdownRequestSent) {
+                console.log('Page is definitely being closed');
+                shutdownRequestSent = true;
+                sendShutdownRequest();
+            }
+        });
+
+        // 페이지 언로드 시 서버 종료 요청
+        window.addEventListener('unload', function(e) {
+            console.log('unload event triggered');
+            console.log('isPageClosing:', isPageClosing, 'isPageRefreshing:', isPageRefreshing);
+            
+            // 페이지가 닫히는 경우에만 종료 요청
+            if (isPageClosing && !shutdownRequestSent) {
+                console.log('Sending shutdown request to server');
+                shutdownRequestSent = true;
+                sendShutdownRequest();
+            }
+        });
+
+        // 페이지 가시성 변경 감지 (탭 전환 등)
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'hidden') {
+                // 페이지가 숨겨질 때 (탭 전환, 창 최소화 등)
+                console.log('Page visibility changed to hidden');
+                visibilityHiddenTime = Date.now();
+                
+                // 3초 후에도 여전히 숨겨져 있으면 페이지가 닫힌 것으로 간주
+                setTimeout(function() {
+                    if (document.visibilityState === 'hidden' && !shutdownRequestSent) {
+                        console.log('Page has been hidden for 3 seconds, assuming it was closed');
+                        shutdownRequestSent = true;
+                        sendShutdownRequest();
+                    }
+                }, 3000);
+            } else {
+                // 페이지가 다시 보일 때
+                console.log('Page visibility changed to visible');
+                visibilityHiddenTime = null;
+            }
+        });
+
+        // 종료 요청 전송 함수
+        function sendShutdownRequest() {
+            if (shutdownRequestSent) {
+                console.log('Shutdown request already sent, skipping...');
+                return;
+            }
+            
+            shutdownRequestSent = true;
+            
+            // navigator.sendBeacon을 사용하여 더 안정적으로 종료 요청 전송
+            if (navigator.sendBeacon) {
+                const data = JSON.stringify({});
+                const success = navigator.sendBeacon('/api/shutdown', data);
+                console.log('Shutdown request sent via sendBeacon:', success);
+            } else {
+                // fallback: 동기적으로 종료 요청을 보내기 위해 XMLHttpRequest 사용
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/shutdown', false); // 동기 요청
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                
+                try {
+                    xhr.send(JSON.stringify({}));
+                    console.log('Shutdown request sent via XMLHttpRequest');
+                } catch (error) {
+                    console.log('Failed to send shutdown request:', error);
+                }
+            }
+        }
+
+        // Heartbeat 기능 추가
+        let heartbeatInterval;
+        let clientId = 'client_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+        function startHeartbeat() {
+            heartbeatInterval = setInterval(function() {
+                fetch('/api/heartbeat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        client_id: clientId
+                    })
+                }).catch(function(error) {
+                    console.log('Heartbeat failed:', error);
+                });
+            }, 3000); // 3초마다 heartbeat 전송 (더 빠른 감지를 위해)
+        }
+
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
+
+        // 페이지 로드 시 heartbeat 시작
+        startHeartbeat();
+
+        // 페이지 언로드 시 heartbeat 중지
+        window.addEventListener('beforeunload', function() {
+            stopHeartbeat();
+        });
+    </script>
+
+    <!-- Time Segment Popup -->
+    <div id="time-segment-popup" class="popup" style="display: none;">
+        <div class="popup-content time-segment-content">
+            <div class="popup-header">
+                <h3>Set segment</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <form id="time-segment-form">
+                <div class="form-group">
+                    <label for="segment-name">Segment Name:</label>
+                    <input type="text" id="segment-name" name="segment-name" required>
+                </div>
+                <div class="form-group">
+                    <label for="segment-start">Start time (seconds):</label>
+                    <input type="number" id="segment-start" name="segment-start" step="any" required>
+                </div>
+                <div class="form-group">
+                    <label for="segment-end">End time (seconds):</label>
+                    <input type="number" id="segment-end" name="segment-end" step="any" required>
+                </div>
+                <button type="submit" class="btn primary">Save Segment</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Save Config File Modal -->
+    <div id="save-config-modal" class="popup" style="display: none;">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3>Save Configuration File</h3>
+                <button class="close-btn" id="save-config-modal-close">&times;</button>
+            </div>
+            <form id="save-config-form">
+                <div class="form-group">
+                    <label for="config-filename">File Name:</label>
+                    <input type="text" id="config-filename" name="config-filename" placeholder="Enter file name (without .json extension)" required>
+                    <small class="form-hint">The file will be saved with .json extension</small>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn secondary" id="save-config-cancel">Cancel</button>
+                    <button type="submit" class="btn primary">Save File</button>
+      
