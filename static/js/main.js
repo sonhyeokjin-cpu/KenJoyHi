@@ -400,12 +400,16 @@ async function loadParameters() {
                     if (window.monacoEditor) {
                         const text = item.textContent.trim();
                         const editor = window.monacoEditor;
-                        const position = editor.getPosition();
-                        editor.executeEdits('', [{
-                            range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
-                            text: text,
-                            forceMoveMarkers: true
-                        }]);
+                        if (typeof editor.executeEdits === 'function' && typeof monaco !== 'undefined') {
+                            const position = editor.getPosition();
+                            editor.executeEdits('', [{
+                                range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+                                text: text,
+                                forceMoveMarkers: true
+                            }]);
+                        } else if (typeof editor.getValue === 'function' && typeof editor.setValue === 'function') {
+                            editor.setValue(editor.getValue() + text);
+                        }
                         editor.focus();
                     }
                 } else if (selectedChart) {
@@ -1412,7 +1416,9 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
             const allData = await Promise.all(dataPromises);
 
             const timeData = allData.length > 0 ? new Float64Array(allData[0].time) : new Float64Array(0);
-            const valueData = allData.map(data => new Float64Array(data.value));
+            // Each channel can have a different native sample clock.  Align
+            // every series to the first channel before handing it to uPlot.
+            const valueData = allData.map(data => alignSeries(timeData, data.time, data.value));
 
             chart.data = { time: timeData, values: valueData };
 
@@ -1459,8 +1465,10 @@ async function updateChart(chartId, parameter) {
 
         updateChartTitle(chart);
 
-        // Fetch the full dataset for the initial load
-        const data = await fetchChartData(parameter, -Infinity, Infinity, null);
+        // Fetch a bounded overview; raw samples are requested only by an
+        // analysis operation that explicitly needs them.
+        const overviewResolution = 2000;
+        const data = await fetchChartData(parameter, -Infinity, Infinity, overviewResolution);
 
         if (data.time && data.time.length > 0) {
             const initialScale = {
@@ -1472,7 +1480,7 @@ async function updateChart(chartId, parameter) {
             chart.lastZoom = initialScale;
 
             // Update the chart with the full data
-            await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max, null);
+            await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max, overviewResolution);
 
             chart.plot.setScale('x', initialScale);
 
@@ -1492,12 +1500,34 @@ async function updateChart(chartId, parameter) {
     updateButtonStates();
 }
 
+function alignSeries(referenceTime, sourceTime, sourceValues) {
+    const out = new Float64Array(referenceTime.length);
+    out.fill(NaN);
+    if (!sourceTime || !sourceValues || sourceTime.length === 0) return out;
+    const t = sourceTime;
+    const v = sourceValues;
+    let j = 0;
+    for (let i = 0; i < referenceTime.length; i++) {
+        const x = referenceTime[i];
+        while (j + 1 < t.length && t[j + 1] <= x) j++;
+        if (j >= t.length || x < t[0] || x > t[t.length - 1]) continue;
+        const v0 = Number(v[j]);
+        if (!Number.isFinite(v0)) continue;
+        if (j + 1 >= t.length || t[j + 1] === t[j]) { out[i] = v0; continue; }
+        const v1 = Number(v[j + 1]);
+        out[i] = Number.isFinite(v1) ? v0 + (v1 - v0) * (x - t[j]) / (t[j + 1] - t[j]) : v0;
+    }
+    return out;
+}
+
 async function fetchChartData(parameter, start, end, resolution) {
     const startParam = (start === null || start === undefined) ? -Infinity : start;
     const endParam = (end === null || end === undefined) ? Infinity : end;
     
     let url = `/api/data?parameter=${encodeURIComponent(parameter)}&start=${startParam}&end=${endParam}`;
-    if (resolution) {
+    if (resolution === 0) {
+        url += '&raw=1';
+    } else if (resolution !== null && resolution !== undefined) {
         url += `&resolution=${resolution}`;
     }
 
@@ -1534,7 +1564,7 @@ async function fetchChartData(parameter, start, end, resolution) {
 // FFT 분석 함수
 async function performFFTAnalysis(chartId) {
     const chart = charts.find(c => c.id === chartId);
-    if (!chart || !chart.parameters.length === 1) return;
+    if (!chart || chart.parameters.length !== 1) return;
 
     try {
         // 현재 보여지는 시간 영역대 가져오기
@@ -1543,7 +1573,7 @@ async function performFFTAnalysis(chartId) {
         const end = currentScale.max;
 
         // 현재 보이는 영역의 데이터만 요청
-        const data = await fetchChartData(chart.parameters[0], start, end);
+        const data = await fetchChartData(chart.parameters[0], start, end, 0);
         
         // FFT 계산
         const fftResult = calculateFFT(data.time, data.value);
@@ -1601,14 +1631,26 @@ function simpleFFT(real, imag) {
 }
 
 function calculateFFT(time, values) {
-    // 데이터 포인트 수를 2의 거듭제곱으로 조정
-    const n = Math.pow(2, Math.ceil(Math.log2(values.length)));
+    const finite = values.map((v, i) => [Number(time[i]), Number(v)])
+        .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
+    if (finite.length < 4) throw new Error('At least four finite samples are required for FFT');
+    const t = finite.map(p => p[0]);
+    const x = finite.map(p => p[1]);
+    const dts = [];
+    for (let i = 1; i < t.length; i++) dts.push(t[i] - t[i - 1]);
+    const dt = dts.slice().sort((a, b) => a - b)[Math.floor(dts.length / 2)];
+    if (!(dt > 0) || dts.some(d => Math.abs(d - dt) > dt * 0.01)) {
+        throw new Error('FFT requires a nearly uniform time axis');
+    }
+    // Keep browser work bounded and use a Hann window to reduce leakage.
+    const sampleCount = Math.min(x.length, 262144);
+    const n = Math.pow(2, Math.floor(Math.log2(sampleCount)));
     const real = new Float64Array(n);
     const imag = new Float64Array(n);
-    
-    // 데이터 복사
-    for (let i = 0; i < values.length; i++) {
-        real[i] = values[i];
+    const mean = x.slice(0, n).reduce((a, b) => a + b, 0) / n;
+    for (let i = 0; i < n; i++) {
+        const w = 0.5 * (1 - Math.cos(2 * Math.PI * i / (n - 1)));
+        real[i] = (x[i] - mean) * w;
         imag[i] = 0;
     }
     
@@ -1616,13 +1658,12 @@ function calculateFFT(time, values) {
     const result = simpleFFT(real, imag);
     
     // 주파수 계산
-    const dt = time[1] - time[0];
     const frequencies = new Float64Array(n/2);
     const magnitudes = new Float64Array(n/2);
     
     for (let i = 0; i < n/2; i++) {
         frequencies[i] = i / (n * dt);
-        magnitudes[i] = Math.sqrt(result.real[i] * result.real[i] + result.imag[i] * result.imag[i]) / n;
+        magnitudes[i] = 2 * Math.sqrt(result.real[i] * result.real[i] + result.imag[i] * result.imag[i]) / n;
     }
     
     return { frequencies, magnitudes };
@@ -1890,31 +1931,37 @@ async function createScatterChart(chartId1, chartId2) {
 
         // 데이터 요청
         const [data1, data2] = await Promise.all([
-            fetchChartData(param1, start, end),
-            fetchChartData(param2, start, end)
+            fetchChartData(param1, start, end, 2000),
+            fetchChartData(param2, start, end, 2000)
         ]);
 
         if (!data1.time || !data1.value || !data2.time || !data2.value) {
             throw new Error('Invalid data received from server');
         }
 
-        console.log('Creating scatter chart with data points:', data1.value.length);
+        const alignedY = alignSeries(new Float64Array(data1.time), data2.time, data2.value);
+        const paired = data1.value.map((x, i) => [Number(x), alignedY[i]])
+            .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+        if (paired.length < 2) throw new Error('Not enough overlapping finite samples');
+        const xValues = paired.map(p => p[0]);
+        const yValues = paired.map(p => p[1]);
+        console.log('Creating scatter chart with data points:', paired.length);
         
         // 데이터가 너무 많은 경우 처리
         const maxPoints = 10000; // 최대 표시할 포인트 수
         let plotX, plotY;
         
-        if (data1.value.length > maxPoints) {
-            const step = Math.ceil(data1.value.length / maxPoints);
+        if (paired.length > maxPoints) {
+            const step = Math.ceil(paired.length / maxPoints);
             plotX = [];
             plotY = [];
-            for (let i = 0; i < data1.value.length; i += step) {
-                plotX.push(data1.value[i]);
-                plotY.push(data2.value[i]);
+            for (let i = 0; i < paired.length; i += step) {
+                plotX.push(xValues[i]);
+                plotY.push(yValues[i]);
             }
         } else {
-            plotX = data1.value;
-            plotY = data2.value;
+            plotX = xValues;
+            plotY = yValues;
         }
 
         // 데이터 배열이 모두 같은 길이인지 확인
@@ -1929,20 +1976,22 @@ async function createScatterChart(chartId1, chartId2) {
         const yMax = Math.max(...plotY);
 
         // 선형 회귀 계산 (전체 데이터 사용)
-        const n = data1.value.length;
-        const sumX = data1.value.reduce((a, b) => a + b, 0);
-        const sumY = data2.value.reduce((a, b) => a + b, 0);
-        const sumXY = data1.value.reduce((sum, x, i) => sum + x * data2.value[i], 0);
-        const sumX2 = data1.value.reduce((sum, x) => sum + x * x, 0);
+        const n = paired.length;
+        const sumX = xValues.reduce((a, b) => a + b, 0);
+        const sumY = yValues.reduce((a, b) => a + b, 0);
+        const sumXY = xValues.reduce((sum, x, i) => sum + x * yValues[i], 0);
+        const sumX2 = xValues.reduce((sum, x) => sum + x * x, 0);
         
-        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const denominator = n * sumX2 - sumX * sumX;
+        if (Math.abs(denominator) < Number.EPSILON) throw new Error('X values have no variance');
+        const slope = (n * sumXY - sumX * sumY) / denominator;
         const intercept = (sumY - slope * sumX) / n;
         
         // R² 계산
         const yMean = sumY / n;
-        const ssTot = data2.value.reduce((sum, y) => sum + Math.pow(y - yMean, 2), 0);
-        const ssRes = data2.value.reduce((sum, y, i) => sum + Math.pow(y - (slope * data1.value[i] + intercept), 2), 0);
-        const r2 = 1 - (ssRes / ssTot);
+        const ssTot = yValues.reduce((sum, y) => sum + Math.pow(y - yMean, 2), 0);
+        const ssRes = yValues.reduce((sum, y, i) => sum + Math.pow(y - (slope * xValues[i] + intercept), 2), 0);
+        const r2 = ssTot === 0 ? 1 : 1 - (ssRes / ssTot);
 
         // 회귀선 데이터 생성 (plotX의 각 값에 대해)
         const regressionY = plotX.map(x => slope * x + intercept);
@@ -1957,7 +2006,6 @@ async function createScatterChart(chartId1, chartId2) {
         let scatterData = [
             new Float64Array(sortedX),
             new Float64Array(sortedY),
-            new Float64Array(sortedX),
             new Float64Array(sortedRegressionY)
         ];
 
@@ -2351,78 +2399,18 @@ async function performMinMaxAnalysis(chartId) {
         const start = currentScale.min;
         const end = currentScale.max;
 
-        // 모든 파라미터에 대한 데이터 요청
-        const dataPromises = chart.parameters.map(param => fetchChartData(param, start, end));
-        const allData = await Promise.all(dataPromises);
-
-        // 각 파라미터별 결과를 저장할 배열
-        const results = [];
-
-        // 각 파라미터에 대해 Min/Max 분석 수행
-        for (let i = 0; i < chart.parameters.length; i++) {
-            const data = allData[i];
-            if (!data.time || !data.value || data.time.length === 0) {
-                continue;
-            }
-
-            // 최소/최대값 계산 (최적화된 방식)
-            let minValue = Infinity;
-            let maxValue = -Infinity;
-            let minIndex = 0;
-            let maxIndex = 0;
-
-            // 데이터가 너무 많은 경우 샘플링
-            const maxSamples = 100000; // 최대 샘플 수
-            const step = Math.max(1, Math.floor(data.value.length / maxSamples));
-            
-            for (let j = 0; j < data.value.length; j += step) {
-                const value = data.value[j];
-                if (value < minValue) {
-                    minValue = value;
-                    minIndex = j;
-                }
-                if (value > maxValue) {
-                    maxValue = value;
-                    maxIndex = j;
-                }
-            }
-
-            // 정확한 최소/최대값을 위해 해당 인덱스 주변의 데이터도 확인
-            const searchRange = Math.min(step, 1000); // 주변 검색 범위
-            const startMin = Math.max(0, minIndex - searchRange);
-            const endMin = Math.min(data.value.length, minIndex + searchRange);
-            const startMax = Math.max(0, maxIndex - searchRange);
-            const endMax = Math.min(data.value.length, maxIndex + searchRange);
-
-            // 최소값 주변 검색
-            for (let j = startMin; j < endMin; j++) {
-                if (data.value[j] < minValue) {
-                    minValue = data.value[j];
-                    minIndex = j;
-                }
-            }
-
-            // 최대값 주변 검색
-            for (let j = startMax; j < endMax; j++) {
-                if (data.value[j] > maxValue) {
-                    maxValue = data.value[j];
-                    maxIndex = j;
-                }
-            }
-
-            const minTime = data.time[minIndex];
-            const maxTime = data.time[maxIndex];
-
-            // 결과 저장
-            results.push({
-                parameter: chart.parameters[i],
-                minValue,
-                maxValue,
-                minTime,
-                maxTime,
-                dataPoints: data.value.length
-            });
-        }
+        // Exact statistics are computed chunk-wise on the server; no
+        // downsampling can hide a narrow spike.
+        const responses = await Promise.all(chart.parameters.map(async parameter => {
+            const response = await fetch(`/api/statistics?parameter=${encodeURIComponent(parameter)}&start=${start}&end=${end}`);
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || 'Statistics request failed');
+            return { parameter, ...body };
+        }));
+        const results = responses.filter(r => r.valid_count > 0).map(r => ({
+            parameter: r.parameter, minValue: r.min, maxValue: r.max,
+            minTime: r.min_time, maxTime: r.max_time, dataPoints: r.count
+        }));
 
         // 결과 표시
         const timeRangeStr = `${(end - start).toFixed(2)} seconds`;
@@ -4318,7 +4306,7 @@ async function saveConfigFile() {
     modal.style.display = 'block';
 
     // 모달 닫기 함수
-    const closeModal = () => {
+    let closeModal = () => {
         modal.style.display = 'none';
         filenameInput.value = '';
     };
@@ -5612,6 +5600,10 @@ function pasteToSelectedRow() {
 
 // Canvas Mode Functions
 function toggleCanvasMode() {
+    if (typeof GridStack === 'undefined' || typeof echarts === 'undefined') {
+        showNotification('Canvas mode requires the optional ECharts/GridStack libraries.', 'error');
+        return;
+    }
     isCanvasMode = !isCanvasMode;
     const canvasBtn = document.getElementById('canvas-btn');
     const plotArea = document.getElementById('plot-area');
@@ -5652,7 +5644,7 @@ function toggleCanvasMode() {
 }
 
 function addCanvasChart() {
-    if (!gridStack) return;
+    if (!gridStack || typeof echarts === 'undefined') return;
     
     const widgetId = `widget-${Date.now()}`;
     const chartId = `echart-${Date.now()}`;

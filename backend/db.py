@@ -63,23 +63,8 @@ def ensure_data_directory():
         return False
 
 def cleanup_database():
-    """
-    프로그램 종료 시 데이터베이스 파일 삭제
-    """
-    global _db_initialized
-    if not _db_initialized:
-        logger.info("Database was not initialized, skipping cleanup")
-        return
-        
-    try:
-        if os.path.exists(DB_PATH):
-            # 파일에 쓰기 권한 추가
-            os.chmod(DB_PATH, stat.S_IWRITE | stat.S_IREAD)
-            os.remove(DB_PATH)
-            logger.info("Database file removed successfully")
-    except Exception as e:
-        logger.error(f"Error removing database file: {str(e)}")
-        logger.error(traceback.format_exc())
+    """Session data is persistent; closing the UI must never discard it."""
+    return
 
 def init_db():
     """
@@ -93,17 +78,6 @@ def init_db():
         # Ensure data directory exists with proper permissions
         if not ensure_data_directory():
             raise Exception("Failed to create data directory")
-        
-        # Delete existing database file if it exists
-        if os.path.exists(DB_PATH):
-            try:
-                os.chmod(DB_PATH, stat.S_IWRITE | stat.S_IREAD)
-                os.remove(DB_PATH)
-                logger.info("Existing database file removed")
-            except Exception as e:
-                logger.error(f"Error removing existing database file: {str(e)}")
-                logger.error(traceback.format_exc())
-                raise
         
         # 데이터베이스 연결
         conn = sqlite3.connect(DB_PATH)
@@ -248,52 +222,11 @@ def ensure_tables_exist(cursor):
         return False
 
 def save_timeseries_data(param_name, time_data, value_data, level):
-    """
-    Save time series data to the database
-    """
-    logger.info(f"Saving timeseries data for {param_name} (level {level})")
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        
-        # Ensure tables exist
-        if not ensure_tables_exist(c):
-            raise Exception("Failed to ensure tables exist")
-        
-        # Insert or get parameter ID
-        c.execute('INSERT OR IGNORE INTO parameters (name) VALUES (?)', (param_name,))
-        c.execute('SELECT id FROM parameters WHERE name = ?', (param_name,))
-        param_id = c.fetchone()[0]
-        logger.info(f"Parameter ID for {param_name}: {param_id}")
-        
-        # Convert input data to numpy arrays if they are not already
-        if not isinstance(time_data, np.ndarray):
-            time_data = np.array(time_data, dtype=np.float64)
-        if not isinstance(value_data, np.ndarray):
-            value_data = np.array(value_data, dtype=np.float64)
-        
-        # Convert numpy arrays to bytes
-        time_blob = time_data.tobytes()
-        value_blob = value_data.tobytes()
-        
-        # Save time series data
-        c.execute('''
-            INSERT INTO timeseries (parameter_id, level, time_data, value_data)
-            VALUES (?, ?, ?, ?)
-        ''', (param_id, level, time_blob, value_blob))
-        
-        conn.commit()
-        logger.info(f"Successfully saved timeseries data for {param_name} (level {level})")
-    except Exception as e:
-        logger.error(f"Error saving timeseries data: {str(e)}")
-        logger.error(traceback.format_exc())
-        if conn:
-            conn.rollback()
-        raise
-    finally:
-        if conn:
-            conn.close()
+    if level != 0:
+        raise ValueError('Only original level-0 data may be stored')
+    from .storage import channel_writer
+    with channel_writer(DB_PATH, param_name) as writer:
+        writer.append(time_data, value_data)
 
 def get_parameters():
     """
@@ -374,73 +307,13 @@ def downsample_data(time_data, value_data, resolution):
     return np.array(out_time), np.array(out_value)
 
 def get_timeseries_data(parameter, start, end, resolution=None, file_type=None):
-    """
-    Get time series data for a parameter within the specified time range.
-    Downsampling is applied if the parameter's total points > 10M AND the points in the current view > 2M.
-    """
-    logger.info(f"Getting timeseries data for {parameter} from {start} to {end} with resolution {resolution}")
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        
-        c.execute('SELECT id FROM parameters WHERE name = ?', (parameter,))
-        result = c.fetchone()
-        if not result:
-            logger.error(f"Parameter {parameter} not found")
-            return {'time': [], 'value': []}
-        
-        param_id = result[0]
-        
-        query = "SELECT time_data, value_data FROM timeseries WHERE parameter_id = ? AND level = 0 ORDER BY id DESC LIMIT 1"
-        c.execute(query, (param_id,))
-        result = c.fetchone()
-        
-        if not result:
-            logger.error(f"No data found for parameter {parameter}")
-            return {'time': [], 'value': []}
-        
-        time_blob, value_blob = result
-        full_time_data = np.frombuffer(time_blob, dtype=np.float64)
-        full_value_data = np.frombuffer(value_blob, dtype=np.float64)
-
-        total_points = len(full_time_data)
-
-        # Filter by time range first
-        if start != -float('inf') or end != float('inf'):
-            mask = (full_time_data >= start) & (full_time_data <= end)
-            time_data = full_time_data[mask]
-            value_data = full_value_data[mask]
-        else:
-            time_data = full_time_data
-            value_data = full_value_data
-
-        # Then, filter out any NaN values
-        valid_mask = ~np.isnan(value_data)
-        time_data = time_data[valid_mask]
-        value_data = value_data[valid_mask]
-
-        num_view_points = len(time_data)
-        logger.info(f"Total points for {parameter} is {total_points}. Points in view [{start}, {end}] is {num_view_points}.")
-
-        logger.info("Returning raw data for the requested range without downsampling.")
-
-        if len(time_data) > 0:
-            logger.info(f"  Returning Time array: min={np.min(time_data)}, max={np.max(time_data)}, len={len(time_data)}")
-            logger.info(f"  Returning Value array: min={np.min(value_data)}, max={np.max(value_data)}, mean={np.mean(value_data):.6f}")
-        
-        return {
-            'time': time_data.tolist(),
-            'value': value_data.tolist()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting timeseries data: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if conn:
-            conn.close()
+    from .storage import envelope, read_arrays, metadata
+    if resolution is not None:
+        t, y, meta = envelope(DB_PATH, parameter, start, end, resolution)
+        return {'time': t, 'value': y, 'metadata': meta, 'representation': 'envelope'}
+    t, y = read_arrays(DB_PATH, parameter, start, end)
+    return {'time': t.tolist(), 'value': [float(v) if np.isfinite(v) else None for v in y],
+            'metadata': metadata(DB_PATH, parameter), 'representation': 'raw'}
 
 def debug_database():
     """
@@ -474,90 +347,16 @@ def debug_database():
             conn.close()
 
 def get_global_start_time():
-    """
-    DB에 저장된 모든 파라미터의 첫 시간값 중 최소값(전체 기준 시작시점, 초 단위)을 반환
-    """
-    logger.info("Fetching global start time (minimum of all parameter first times)")
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        # Ensure tables exist
-        if not ensure_tables_exist(c):
-            raise Exception("Failed to ensure tables exist")
-        # Get all parameter IDs
-        c.execute('SELECT id FROM parameters')
-        param_ids = [row[0] for row in c.fetchall()]
-        first_times = []
-        for param_id in param_ids:
-            c.execute('''
-                SELECT time_data FROM timeseries
-                WHERE parameter_id = ? AND level = 0
-                ORDER BY id DESC
-                LIMIT 1
-            ''', (param_id,))
-            result = c.fetchone()
-            if result:
-                time_blob = result[0]
-                time_data = np.frombuffer(time_blob, dtype=np.float64)
-                if len(time_data) > 0:
-                    first_times.append(time_data[0])
-        if not first_times:
-            logger.warning("No valid time data found in database")
-            return 0.0
-        global_start_time = min(first_times)
-        logger.info(f"Global start time: {global_start_time}")
-        return global_start_time
-    except Exception as e:
-        logger.error(f"Error fetching global start time: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if conn:
-            conn.close()
+    from .storage import metadata
+    values = [metadata(DB_PATH, name)['start'] for name in get_parameters()]
+    values = [value for value in values if value is not None]
+    return min(values) if values else 0.0
 
 def get_global_end_time():
-    """
-    DB에 저장된 모든 파라미터의 마지막 시간값 중 최대값(전체 기준 종료시점, 초 단위)을 반환
-    """
-    logger.info("Fetching global end time (maximum of all parameter last times)")
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        # Ensure tables exist
-        if not ensure_tables_exist(c):
-            raise Exception("Failed to ensure tables exist")
-        # Get all parameter IDs
-        c.execute('SELECT id FROM parameters')
-        param_ids = [row[0] for row in c.fetchall()]
-        last_times = []
-        for param_id in param_ids:
-            c.execute('''
-                SELECT time_data FROM timeseries
-                WHERE parameter_id = ? AND level = 0
-                ORDER BY id DESC
-                LIMIT 1
-            ''', (param_id,))
-            result = c.fetchone()
-            if result:
-                time_blob = result[0]
-                time_data = np.frombuffer(time_blob, dtype=np.float64)
-                if len(time_data) > 0:
-                    last_times.append(time_data[-1])
-        if not last_times:
-            logger.warning("No valid time data found in database")
-            return 0.0
-        global_end_time = max(last_times)
-        logger.info(f"Global end time: {global_end_time}")
-        return global_end_time
-    except Exception as e:
-        logger.error(f"Error fetching global end time: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if conn:
-            conn.close()
+    from .storage import metadata
+    values = [metadata(DB_PATH, name)['end'] for name in get_parameters()]
+    values = [value for value in values if value is not None]
+    return max(values) if values else 0.0
 
 def ensure_global_time_table():
     """global_time 테이블이 없으면 생성"""
@@ -575,27 +374,16 @@ def ensure_global_time_table():
     finally:
         conn.close()
 
-def set_global_time(start, end):
+def set_global_time(start, end, time_basis='epoch'):
+    if not np.isfinite(start) or not np.isfinite(end) or start > end:
+        raise ValueError('Invalid global time range')
     ensure_global_time_table()
-    print(f"[DEBUG][set_global_time] DB_PATH: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO global_time (id, start_time, end_time)
-            VALUES (1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET start_time=excluded.start_time, end_time=excluded.end_time
-        ''', (start, end))
-        conn.commit()
-        print(f"[DEBUG][set_global_time] committed start={start}, end={end}")
-        # 바로 읽어서 확인
-        c.execute('SELECT start_time, end_time FROM global_time WHERE id=1')
-        row = c.fetchone()
-        print(f"[DEBUG][set_global_time] just inserted row: {row}")
-    except Exception as e:
-        print(f"[DEBUG][set_global_time] error: {e}")
-    finally:
-        conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(global_time)')}
+        if 'time_basis' not in cols:
+            conn.execute("ALTER TABLE global_time ADD COLUMN time_basis TEXT DEFAULT 'legacy'")
+        conn.execute('INSERT OR REPLACE INTO global_time(id,start_time,end_time,time_basis) VALUES(1,?,?,?)',
+                     (float(start),float(end),time_basis))
 
 def get_global_time():
     """global_time 테이블에서 start, end를 반환. 없으면 (0.0, 0.0)"""
@@ -979,6 +767,10 @@ def ensure_parameter_config_table():
                 )
             ''')
         
+        columns = {row[1] for row in cursor.execute('PRAGMA table_info(parameter_config)')}
+        if 'custom_py_content' not in columns:
+            cursor.execute("ALTER TABLE parameter_config ADD COLUMN custom_py_content TEXT DEFAULT ''")
+
         conn.commit()
         logger.info("Parameter config table ensured")
         
@@ -1007,18 +799,23 @@ def save_parameter_config(config_data):
         # Clear existing data
         cursor.execute('DELETE FROM parameter_config')
         
-        # Insert new data
+        # Insert new data.  Include the script body in the same statement so
+        # the row cannot be associated with the wrong ``last_insert_rowid``
+        # when another connection writes concurrently.
         for config in config_data:
             cursor.execute('''
                 INSERT INTO parameter_config 
-                (parameter_name, description, type, formula, custom_py, lo, hi, line1, line1_color, line2, line2_color, line3, line3_color, line4, line4_color, line5, line5_color, line6, line6_color)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (parameter_name, description, type, formula, custom_py, custom_py_content,
+                 lo, hi, line1, line1_color, line2, line2_color, line3, line3_color,
+                 line4, line4_color, line5, line5_color, line6, line6_color)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 config.get('parameter_name', ''),
                 config.get('description', ''),
                 config.get('type', 'Raw'),
                 config.get('formula', ''),
                 config.get('custom_py', ''),
+                config.get('custom_py_content', ''),
                 config.get('lo', None),
                 config.get('hi', None),
                 config.get('line1', None),
@@ -1034,7 +831,7 @@ def save_parameter_config(config_data):
                 config.get('line6', None),
                 config.get('line6_color', '#00FFFF')
             ))
-        
+
         conn.commit()
         logger.info(f"Saved {len(config_data)} parameter configurations")
         
@@ -1062,9 +859,10 @@ def load_parameter_config():
         if not cursor.fetchone():
             return []
         
+        ensure_parameter_config_table()
         # Load configuration data
         cursor.execute('''
-            SELECT parameter_name, description, type, formula, custom_py, lo, hi, line1, line1_color, line2, line2_color, line3, line3_color, line4, line4_color, line5, line5_color, line6, line6_color
+            SELECT parameter_name, description, type, formula, custom_py, lo, hi, line1, line1_color, line2, line2_color, line3, line3_color, line4, line4_color, line5, line5_color, line6, line6_color, custom_py_content
             FROM parameter_config
             ORDER BY parameter_name
         ''')
@@ -1081,18 +879,19 @@ def load_parameter_config():
                 'custom_py': row[4] or '',
                 'lo': row[5] if row[5] is not None else '',
                 'hi': row[6] if row[6] is not None else '',
-                'line1': row[7] if row[7] is not None and row[7] != 0 else '',
+                'line1': row[7] if row[7] is not None else '',
                 'line1_color': row[8] if row[8] is not None else '#FF0000',
-                'line2': row[9] if row[9] is not None and row[9] != 0 else '',
+                'line2': row[9] if row[9] is not None else '',
                 'line2_color': row[10] if row[10] is not None else '#00FF00',
-                'line3': row[11] if row[11] is not None and row[11] != 0 else '',
+                'line3': row[11] if row[11] is not None else '',
                 'line3_color': row[12] if row[12] is not None else '#0000FF',
-                'line4': row[13] if row[13] is not None and row[13] != 0 else '',
+                'line4': row[13] if row[13] is not None else '',
                 'line4_color': row[14] if row[14] is not None else '#FFFF00',
-                'line5': row[15] if row[15] is not None and row[15] != 0 else '',
+                'line5': row[15] if row[15] is not None else '',
                 'line5_color': row[16] if row[16] is not None else '#FF00FF',
-                'line6': row[17] if row[17] is not None and row[17] != 0 else '',
-                'line6_color': row[18] if row[18] is not None else '#00FFFF'
+                'line6': row[17] if row[17] is not None else '',
+                'line6_color': row[18] if row[18] is not None else '#00FFFF',
+                'custom_py_content': row[19] or ''
             })
         
         logger.info(f"Loaded {len(config_data)} parameter configurations")

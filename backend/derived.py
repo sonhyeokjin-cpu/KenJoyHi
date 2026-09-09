@@ -9,6 +9,17 @@ import scipy.fft as sp_fft
 
 logger = logging.getLogger(__name__)
 
+
+def gray_to_binary(value):
+    """Decode a Gray-coded integer (the old expression encoded it again)."""
+    value = np.asarray(value, dtype=np.uint64)
+    result = value.copy()
+    shift = 1
+    while shift < 64:
+        result ^= result >> shift
+        shift <<= 1
+    return result
+
 # Define safe globals for parameter derivation
 safe_globals = {
     # Basic operators
@@ -98,7 +109,7 @@ safe_globals = {
     'extract_bits': lambda x, start, end: (x >> start) & ((1 << (end - start)) - 1),
     'check_parity': lambda x: np.sum(x & 1) % 2,
     'bcd_to_int': lambda x: int(str(x), 16),
-    'gray_to_binary': lambda x: x ^ (x >> 1),
+    'gray_to_binary': gray_to_binary,
     'mil1553_is_rt_to_bc': lambda x: (x >> 10) & 1,
     'mil1553_subaddress': lambda x: (x >> 5) & 0x1F,
     'mil1553_word_count': lambda x: x & 0x1F,
@@ -293,6 +304,10 @@ def validate_code(code):
                 if isinstance(node.func, ast.Name):
                     if node.func.id in ('exec', 'eval'):
                         raise ValueError("exec/eval calls are not allowed")
+                    if node.func.id in ('open', '__import__', 'compile', 'input'):
+                        raise ValueError(f"{node.func.id} is not allowed")
+            if isinstance(node, ast.Attribute) and node.attr.startswith('_'):
+                raise ValueError("Private attributes are not allowed")
         
         return True
     except Exception as e:
@@ -317,15 +332,33 @@ def execute_derived_parameter(code, parameters):
         # Create a local environment with the parameters
         local_env = {name: np.array(values) for name, values in parameters.items()}
         
-        # Execute the code in the safe environment
-        exec(code, safe_globals, local_env)
+        # ``exec`` injects the process builtins when the key is absent.  Use a
+        # small explicit allow-list so a formula cannot reach open/import or
+        # introspection through ``__builtins__``.
+        execution_globals = dict(safe_globals)
+        execution_globals['__builtins__'] = {
+            'abs': abs, 'all': all, 'any': any, 'bool': bool, 'float': float,
+            'int': int, 'len': len, 'max': max, 'min': min, 'round': round,
+            'sum': sum, 'True': True, 'False': False, 'None': None,
+        }
+        exec(code, execution_globals, local_env)
         
         # Get the result (assuming the last expression is the result)
         result = local_env.get('result')
         if result is None:
             raise ValueError("Code must assign the result to a variable named 'result'")
         
-        return result
+        result = np.asarray(result)
+        if result.ndim == 0:
+            raise ValueError("Derived result must be a one-dimensional time series")
+        if result.ndim != 1:
+            raise ValueError("Derived result must be one-dimensional")
+        expected = len(next(iter(local_env.values()))) if local_env else result.size
+        if result.size != expected:
+            raise ValueError(f"Derived result length {result.size} does not match input length {expected}")
+        if result.dtype.kind not in 'biuf':
+            raise ValueError("Derived result must be numeric")
+        return np.ascontiguousarray(result, dtype=np.float64)
         
     except Exception as e:
         logger.error(f"Error executing derived parameter code: {str(e)}")

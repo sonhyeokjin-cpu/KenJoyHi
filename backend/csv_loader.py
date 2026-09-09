@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import logging
 import os
 import traceback
-from .db import save_timeseries_data
-from .db import set_global_time
+from .db import set_global_time, DB_PATH
+from .storage import channel_writer
 
 # 로깅 설정
 logging.basicConfig(
@@ -90,7 +90,7 @@ def process_csv_file(filepath, file_type='regular'):
     Process CSV file by reading in chunks to handle massive files.
     Splits parameters larger than CHUNK_SIZE points into separate DB entries.
     """
-    CHUNK_SIZE = 50_000_000
+    CHUNK_SIZE = 250_000
     try:
         logger.info(f"Processing CSV file: {filepath} (type: {file_type})")
 
@@ -121,78 +121,42 @@ def process_csv_file(filepath, file_type='regular'):
         if global_start_time == float('inf'):
             raise ValueError("No valid time data found.")
 
-        set_global_time(global_start_time, max_end_time)
+        set_global_time(global_start_time, max_end_time, time_basis='day_of_year_seconds')
         logger.info(f"Global time determined: {global_start_time} to {max_end_time}")
 
-        # --- Pass 2: Process each data column, splitting if necessary ---
+        # --- Pass 2: Process each data column as one streamed channel ---
+        # The previous implementation wrote every CSV chunk with
+        # save_timeseries_data().  That function replaces a channel, so for a
+        # large file only the last chunk survived.  ChannelWriter keeps one
+        # metadata row and appends bounded SQLite blobs atomically.
         data_cols = all_columns[1:]
         for data_col in data_cols:
             param_name = sanitize_parameter_name(data_col)
             logger.info(f"Processing column: {param_name}")
             try:
-                iterator = pd.read_csv(filepath, usecols=[time_col, data_col], chunksize=CHUNK_SIZE, na_values=['', 'nan', 'NaN'], encoding='utf-8')
-                
-                first_chunk = next(iterator, None)
-                if first_chunk is None:
-                    logger.warning(f"Column {data_col} is empty. Skipping.")
-                    continue
-
-                second_chunk = next(iterator, None)
-
-                if second_chunk is None:
-                    # Single chunk, save without suffix
-                    logger.info(f"Parameter {param_name} fits in a single chunk.")
-                    if file_type == 'fixed_wing':
-                        first_chunk = first_chunk.iloc[2:]
-                    
-                    time_series = first_chunk[time_col].apply(parse_time)
-                    value_series = pd.to_numeric(first_chunk[data_col], errors='coerce')
-                    mask = time_series.notna() & value_series.notna()
-                    
-                    relative_time = time_series[mask].to_numpy(dtype=np.float64) - global_start_time
-                    value_data = value_series[mask].to_numpy(dtype=np.float64)
-
-                    if relative_time.size > 0:
-                        save_timeseries_data(param_name, relative_time, value_data, 0)
-                else:
-                    # Multiple chunks, needs splitting
-                    logger.info(f"Parameter {param_name} exceeds {CHUNK_SIZE} rows. Splitting.")
-                    # Process first chunk
-                    chunk_param_name = f"{param_name}_1"
-                    logger.info(f"Processing chunk 1 -> {chunk_param_name}")
-                    if file_type == 'fixed_wing':
-                        first_chunk = first_chunk.iloc[2:]
-
-                    time_series = first_chunk[time_col].apply(parse_time)
-                    value_series = pd.to_numeric(first_chunk[data_col], errors='coerce')
-                    mask = time_series.notna() & value_series.notna()
-                    relative_time = time_series[mask].to_numpy(dtype=np.float64) - global_start_time
-                    value_data = value_series[mask].to_numpy(dtype=np.float64)
-                    if relative_time.size > 0:
-                        save_timeseries_data(chunk_param_name, relative_time, value_data, 0)
-
-                    # Process second chunk
-                    chunk_param_name = f"{param_name}_2"
-                    logger.info(f"Processing chunk 2 -> {chunk_param_name}")
-                    time_series = second_chunk[time_col].apply(parse_time)
-                    value_series = pd.to_numeric(second_chunk[data_col], errors='coerce')
-                    mask = time_series.notna() & value_series.notna()
-                    relative_time = time_series[mask].to_numpy(dtype=np.float64) - global_start_time
-                    value_data = value_series[mask].to_numpy(dtype=np.float64)
-                    if relative_time.size > 0:
-                        save_timeseries_data(chunk_param_name, relative_time, value_data, 0)
-
-                    # Process remaining chunks
-                    for i, chunk_df in enumerate(iterator, start=3):
-                        chunk_param_name = f"{param_name}_{i}"
-                        logger.info(f"Processing chunk {i} -> {chunk_param_name}")
-                        time_series = chunk_df[time_col].apply(parse_time)
+                iterator = pd.read_csv(filepath, usecols=[time_col, data_col],
+                                       chunksize=CHUNK_SIZE,
+                                       na_values=['', 'nan', 'NaN'], encoding='utf-8')
+                wrote = False
+                with channel_writer(DB_PATH, param_name) as writer:
+                    for chunk_index, chunk_df in enumerate(iterator):
+                        if file_type == 'fixed_wing' and chunk_index == 0:
+                            chunk_df = chunk_df.iloc[2:]
+                        if chunk_df.empty:
+                            continue
+                        time_series = chunk_df[time_col].map(parse_time)
                         value_series = pd.to_numeric(chunk_df[data_col], errors='coerce')
-                        mask = time_series.notna() & value_series.notna()
-                        relative_time = time_series[mask].to_numpy(dtype=np.float64) - global_start_time
+                        # Keep NaN values so the time/value alignment is not
+                        # silently changed by missing measurements.
+                        mask = time_series.notna()
+                        relative_time = (time_series[mask].to_numpy(dtype=np.float64)
+                                          - global_start_time)
                         value_data = value_series[mask].to_numpy(dtype=np.float64)
-                        if relative_time.size > 0:
-                            save_timeseries_data(chunk_param_name, relative_time, value_data, 0)
+                        if relative_time.size:
+                            writer.append(relative_time, value_data)
+                            wrote = True
+                if not wrote:
+                    logger.warning(f"Column {data_col} is empty. Skipping.")
 
             except Exception as e:
                 logger.error(f"Error processing column {data_col}: {e}")

@@ -12,3 +12,4 @@ markupsafe==2.1.5
 blinker==1.7.0
 colorama==0.4.6
 pyinstaller==6.4.0 
+pillow==10.2.0
