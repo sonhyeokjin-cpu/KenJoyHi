@@ -7,6 +7,7 @@ datas = [
 ]
 hiddenimports = [
     'backend.loader', 'backend.csv_loader', 'backend.storage',
+    'backend.analysis', 'backend.jobs',
     'backend.filters', 'backend.derived', 'backend.bit_extractor',
     'h5py.defs', 'h5py._objects',
 ]

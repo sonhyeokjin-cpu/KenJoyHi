@@ -13,6 +13,64 @@ let isShowDescription = false; // Show Description 토글 상태
 let lineAlphaPercent = 0; // 라인 투명도 (% 0~100)
 let gridStack = null; // GridStack instance
 let isCanvasMode = false; // Canvas mode state
+let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linear';
+
+async function runBackgroundJob(kind, payload) {
+    const status = document.getElementById('job-status');
+    const created = await fetch(`/api/jobs/${encodeURIComponent(kind)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const initial = await created.json();
+    if (!created.ok) throw new Error(initial.error || 'Failed to create analysis job');
+    if (status) status.textContent = `${kind}: queued`;
+    while (true) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const response = await fetch(`/api/jobs/${initial.id}`);
+        const job = await response.json();
+        if (!response.ok) throw new Error(job.error || 'Failed to read job state');
+        if (status) status.textContent = `${kind}: ${job.progress}%`;
+        if (job.state === 'completed') {
+            if (status) {
+                status.textContent = `${kind}: done`;
+                setTimeout(() => { if (status.textContent === `${kind}: done`) status.textContent = ''; }, 2500);
+            }
+            return job.result;
+        }
+        if (job.state === 'failed' || job.state === 'cancelled') {
+            if (status) status.textContent = `${kind}: ${job.state}`;
+            throw new Error(job.error || `Job ${job.state}`);
+        }
+    }
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+    })[char]);
+}
+
+async function showChannelQuality() {
+    const response = await fetch('/api/channel_quality');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to load channel quality');
+    const channels = data.channels || [];
+    const total = channels.reduce((sum, item) => sum + (item.count || 0), 0);
+    const missing = channels.reduce((sum, item) => sum + (item.missing_count || 0), 0);
+    const duplicates = channels.reduce((sum, item) => sum + (item.duplicate_count || 0), 0);
+    document.getElementById('quality-summary').textContent =
+        `${channels.length.toLocaleString()} channels · ${total.toLocaleString()} stored samples · ${missing.toLocaleString()} missing · ${duplicates.toLocaleString()} duplicates removed`;
+    document.getElementById('quality-table-body').innerHTML = channels.map(item => `<tr>
+        <td>${escapeHtml(item.parameter)}</td>
+        <td>${Number(item.count || 0).toLocaleString()}</td>
+        <td>${Number.isFinite(item.sampling_rate) ? item.sampling_rate.toFixed(3) : '—'}</td>
+        <td>${Number(item.missing_count || 0).toLocaleString()}</td>
+        <td>${Number(item.duplicate_count || 0).toLocaleString()}</td>
+        <td>${Number.isFinite(item.start) ? item.start.toFixed(6) : '—'}</td>
+        <td>${Number.isFinite(item.end) ? item.end.toFixed(6) : '—'}</td>
+    </tr>`).join('');
+    document.getElementById('quality-popup').style.display = 'flex';
+}
 
 // 기본 라인 색상 (파라미터 시리즈용)
 const baseSeriesColors = ['#2196F3', '#FF5722', '#4CAF50'];
@@ -1500,7 +1558,7 @@ async function updateChart(chartId, parameter) {
     updateButtonStates();
 }
 
-function alignSeries(referenceTime, sourceTime, sourceValues) {
+function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignmentPolicy) {
     const out = new Float64Array(referenceTime.length);
     out.fill(NaN);
     if (!sourceTime || !sourceValues || sourceTime.length === 0) return out;
@@ -1513,9 +1571,17 @@ function alignSeries(referenceTime, sourceTime, sourceValues) {
         if (j >= t.length || x < t[0] || x > t[t.length - 1]) continue;
         const v0 = Number(v[j]);
         if (!Number.isFinite(v0)) continue;
-        if (j + 1 >= t.length || t[j + 1] === t[j]) { out[i] = v0; continue; }
+        if (policy === 'hold-last' || j + 1 >= t.length || t[j + 1] === t[j]) {
+            out[i] = v0;
+            continue;
+        }
         const v1 = Number(v[j + 1]);
-        out[i] = Number.isFinite(v1) ? v0 + (v1 - v0) * (x - t[j]) / (t[j + 1] - t[j]) : v0;
+        if (!Number.isFinite(v1)) { out[i] = v0; continue; }
+        if (policy === 'nearest') {
+            out[i] = (x - t[j] <= t[j + 1] - x) ? v0 : v1;
+        } else {
+            out[i] = v0 + (v1 - v0) * (x - t[j]) / (t[j + 1] - t[j]);
+        }
     }
     return out;
 }
@@ -1572,11 +1638,9 @@ async function performFFTAnalysis(chartId) {
         const start = currentScale.min;
         const end = currentScale.max;
 
-        // 현재 보이는 영역의 데이터만 요청
-        const data = await fetchChartData(chart.parameters[0], start, end, 0);
-        
-        // FFT 계산
-        const fftResult = calculateFFT(data.time, data.value);
+        const fftResult = await runBackgroundJob('fft', {
+            parameter: chart.parameters[0], start, end
+        });
         
         // FFT 차트 생성
         createFFTChart(fftResult.frequencies, fftResult.magnitudes, chart.parameters[0]);
@@ -2208,18 +2272,12 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
     if (!selectedChart || !currentFilterType) return;
     
     const chart = charts.find(c => c.id === selectedChart);
-    if (!chart || !chart.parameters.length === 1) return;
+    if (!chart || chart.parameters.length !== 1) return;
     
     try {
         // Get filter parameters
         const params = {};
         let filterTitle = '';
-        
-        // 샘플링 주파수 계산을 위한 데이터 요청
-        const data = await fetchChartData(chart.parameters[0], -Infinity, Infinity);
-        const timeDiff = data.time[1] - data.time[0];
-        const samplingFreq = 1 / timeDiff;
-        const nyquistFreq = samplingFreq / 2;
         
         if (currentFilterType === 'lpf') {
             const cutoffFreq = parseFloat(document.getElementById('lpf-cutoff').value);
@@ -2262,22 +2320,13 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
             filterTitle = `_RMS_${windowSize}window`;
         }
         
-        // Apply filter
-        const response = await fetch('/api/filter', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                parameter: chart.parameters[0],
-                filter_type: currentFilterType,
-                params: params
-            })
+        const result = await runBackgroundJob('filter', {
+            parameter: chart.parameters[0],
+            filter_type: currentFilterType,
+            params: params
         });
         
-        const result = await response.json();
-        
-        if (response.ok) {
+        if (result) {
             // Update chart title with filter information
             const chartContainer = document.getElementById(selectedChart);
             const titleElement = chartContainer.querySelector('.chart-title');
@@ -2369,8 +2418,6 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
             if (typeof loadParameters === 'function') {
                 await loadParameters();
             }
-        } else {
-            throw new Error(result.error);
         }
     } catch (error) {
         console.error('Error applying filter:', error);
@@ -2657,6 +2704,30 @@ async function updateGlobalTimeInfo() {
     }
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+    const policySelect = document.getElementById('alignment-policy');
+    if (policySelect) {
+        policySelect.value = alignmentPolicy;
+        policySelect.addEventListener('change', () => {
+            alignmentPolicy = policySelect.value;
+            localStorage.setItem('wavelab-alignment-policy', alignmentPolicy);
+            charts.forEach(chart => {
+                if (chart.parameters?.length && chart.plot?.scales?.x) {
+                    updateChartData(chart.id, chart.parameters,
+                                    chart.plot.scales.x.min, chart.plot.scales.x.max);
+                }
+            });
+        });
+    }
+    const qualityPopup = document.getElementById('quality-popup');
+    document.getElementById('quality-btn')?.addEventListener('click', () => {
+        showChannelQuality().catch(error => showNotification(error.message, 'error'));
+    });
+    qualityPopup?.querySelector('.close-btn')?.addEventListener('click', () => {
+        qualityPopup.style.display = 'none';
+    });
+});
+
 // Initialize
 loadParameters();
 
@@ -2684,25 +2755,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             try {
-                const response = await fetch('/api/derived', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        name: parameterName,
-                        code: code,
-                        parameters: usedParams
-                    })
+                const data = await runBackgroundJob('derived', {
+                    name: parameterName,
+                    code: code,
+                    parameters: usedParams,
+                    alignment: alignmentPolicy
                 });
-                const data = await response.json();
-                if (response.ok) {
+                if (data) {
                     alert('Parameter generated successfully');
                     document.getElementById('derived-panel').classList.remove('visible');
                     document.getElementById('derived-panel').style.width = '600px'; // 패널 너비 복원
                     if (typeof loadParameters === 'function') loadParameters();
-                } else {
-                    alert('Error: ' + data.error);
                 }
             } catch (error) {
                 alert('Error: ' + error.message);
@@ -4539,24 +4602,14 @@ async function applyConfig() {
                     
                     console.log(`Extracted parameters from custom .py: ${usedParams}`);
                     
-                    // NewDerived API 호출
-                    const response = await fetch('/api/derived', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            name: config.parameter_name,
-                            code: config.custom_py_content,
-                            parameters: usedParams
-                        })
+                    const data = await runBackgroundJob('derived', {
+                        name: config.parameter_name,
+                        code: config.custom_py_content,
+                        parameters: usedParams,
+                        alignment: alignmentPolicy
                     });
-                    
-                    const data = await response.json();
-                    if (response.ok) {
+                    if (data) {
                         console.log(`Successfully created derived parameter from custom .py: ${config.parameter_name}`);
-                    } else {
-                        console.error(`Error creating derived parameter from custom .py ${config.parameter_name}: ${data.error}`);
                     }
                     
                 } catch (error) {

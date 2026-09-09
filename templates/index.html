@@ -267,6 +267,14 @@
         .toolbar .btn {
             position: relative;
         }
+        .toolbar-select { display:flex; align-items:center; gap:5px; font-size:12px; color:#374151; }
+        .toolbar-select select { border:1px solid #cbd5e1; border-radius:4px; padding:5px 7px; background:#fff; }
+        .job-status { min-width:90px; font-size:12px; color:#1976d2; }
+        .quality-summary { margin-bottom:12px; color:#475569; font-size:13px; }
+        .quality-table { width:100%; border-collapse:collapse; font-size:13px; }
+        .quality-table th, .quality-table td { padding:8px 10px; border-bottom:1px solid #e5e7eb; text-align:right; white-space:nowrap; }
+        .quality-table th:first-child, .quality-table td:first-child { text-align:left; position:sticky; left:0; background:#fff; }
+        .quality-table th { position:sticky; top:0; background:#f8fafc; z-index:1; }
         .shortcut-badge {
             position: absolute;
             left: -22px;
@@ -1165,6 +1173,16 @@
                         <a href="#" data-filter="rms">RMS</a>
                     </div>
                 </div>
+                <label class="toolbar-select" title="Alignment used when channels have different sample clocks">
+                    Align
+                    <select id="alignment-policy">
+                        <option value="linear">Linear</option>
+                        <option value="nearest">Nearest</option>
+                        <option value="hold-last">Hold last</option>
+                    </select>
+                </label>
+                <button id="quality-btn" class="btn">Data Quality</button>
+                <span id="job-status" class="job-status" aria-live="polite"></span>
                 <span id="global-time-info" style="margin-left:auto; font-weight:600; color:#1976D2; font-size:1.05rem;"></span>
             </div>
 
@@ -1197,6 +1215,23 @@
                         <textarea id="session-notes-textarea" placeholder="Notes saved automatically with the database..."></textarea>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Channel quality summary -->
+    <div id="quality-popup" class="popup" style="display: none;">
+        <div class="popup-content" style="max-width: 1050px;">
+            <div class="popup-header">
+                <h3>Channel Data Quality</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="quality-summary" id="quality-summary"></div>
+            <div style="overflow:auto; max-height:60vh;">
+                <table class="quality-table">
+                    <thead><tr><th>Parameter</th><th>Samples</th><th>Rate (Hz)</th><th>Missing</th><th>Duplicates removed</th><th>Start</th><th>End</th></tr></thead>
+                    <tbody id="quality-table-body"></tbody>
+                </table>
             </div>
         </div>
     </div>

@@ -23,7 +23,9 @@ def ensure_schema(conn):
         );
         CREATE TABLE IF NOT EXISTS channel_meta (
             parameter_id INTEGER PRIMARY KEY, dtype TEXT NOT NULL,
-            count INTEGER NOT NULL, start REAL NOT NULL, end REAL NOT NULL
+            count INTEGER NOT NULL, start REAL NOT NULL, end REAL NOT NULL,
+            sampling_rate REAL, missing_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS channel_chunks (
             parameter_id INTEGER NOT NULL, ordinal INTEGER NOT NULL,
@@ -34,6 +36,15 @@ def ensure_schema(conn):
         CREATE INDEX IF NOT EXISTS chunks_time
             ON channel_chunks(parameter_id, start, end);
     ''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(channel_meta)')}
+    migrations = {
+        'sampling_rate': 'ALTER TABLE channel_meta ADD COLUMN sampling_rate REAL',
+        'missing_count': 'ALTER TABLE channel_meta ADD COLUMN missing_count INTEGER NOT NULL DEFAULT 0',
+        'duplicate_count': 'ALTER TABLE channel_meta ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0',
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            conn.execute(statement)
 
 
 def validate_arrays(time, values):
@@ -45,8 +56,8 @@ def validate_arrays(time, values):
         raise ValueError('Only real numeric arrays are supported')
     t = np.ascontiguousarray(t, dtype='<f8')
     y = np.ascontiguousarray(y, dtype='<f8')
-    if not np.all(np.isfinite(t)) or (t.size > 1 and np.any(np.diff(t) <= 0)):
-        raise ValueError('Time must be finite and strictly increasing (no duplicates)')
+    if not np.all(np.isfinite(t)) or (t.size > 1 and np.any(np.diff(t) < 0)):
+        raise ValueError('Time must be finite and monotonically increasing')
     if np.any(np.isinf(y)):
         raise ValueError('Infinite values are not supported; use NaN for missing samples')
     return t, y
@@ -64,13 +75,38 @@ class ChannelWriter:
         self.count = 0
         self.ordinal = 0
         self.start = self.end = None
+        self.missing_count = 0
+        self.duplicate_count = 0
+        self._dt_samples = np.array([], dtype=np.float64)
 
     def append(self, time, values):
         t, y = validate_arrays(time, values)
         if not t.size:
             return
-        if self.end is not None and t[0] <= self.end:
+        self.missing_count += int(np.isnan(y).sum())
+        if self.end is not None and t[0] < self.end:
             raise ValueError('Channel chunks must have increasing, non-overlapping time')
+        if self.end is not None and t[0] == self.end:
+            same = np.flatnonzero(t == self.end)
+            drop = int(same[-1] + 1) if same.size else 0
+            self.duplicate_count += drop
+            t, y = t[drop:], y[drop:]
+            if not t.size:
+                return
+        if t.size > 1:
+            duplicate = np.diff(t) == 0
+            self.duplicate_count += int(duplicate.sum())
+            if duplicate.any():
+                # Keep the last value at a duplicated timestamp.
+                keep = np.r_[np.diff(t) > 0, True]
+                t, y = t[keep], y[keep]
+        if t.size > 1:
+            dt = np.diff(t)
+            step = max(1, int(np.ceil(dt.size / 4096)))
+            self._dt_samples = np.r_[self._dt_samples, dt[::step]]
+            if self._dt_samples.size > 100_000:
+                stride = int(np.ceil(self._dt_samples.size / 100_000))
+                self._dt_samples = self._dt_samples[::stride]
         if self.start is None:
             self.start = float(t[0])
         for offset in range(0, t.size, CHUNK_POINTS):
@@ -85,8 +121,15 @@ class ChannelWriter:
     def finish(self):
         if not self.count:
             raise ValueError('A channel must contain at least one sample')
-        self.conn.execute('INSERT INTO channel_meta VALUES (?,?,?,?,?)',
-                          (self.pid, '<f8', int(self.count), self.start, self.end))
+        sampling_rate = None
+        if self._dt_samples.size:
+            median_dt = float(np.median(self._dt_samples))
+            sampling_rate = 1.0 / median_dt if median_dt > 0 else None
+        self.conn.execute('''INSERT INTO channel_meta
+            (parameter_id,dtype,count,start,end,sampling_rate,missing_count,duplicate_count)
+            VALUES (?,?,?,?,?,?,?,?)''',
+            (self.pid, '<f8', int(self.count), self.start, self.end,
+             sampling_rate, self.missing_count, self.duplicate_count))
 
 
 @contextmanager
@@ -109,10 +152,12 @@ def channel_writer(path, name):
 def metadata(path, name):
     with sqlite3.connect(path) as conn:
         ensure_schema(conn)
-        row = conn.execute('''SELECT m.count,m.start,m.end FROM channel_meta m
+        row = conn.execute('''SELECT m.count,m.start,m.end,m.sampling_rate,
+            m.missing_count,m.duplicate_count FROM channel_meta m
             JOIN parameters p ON p.id=m.parameter_id WHERE p.name=?''', (name,)).fetchone()
     if row:
-        return dict(count=row[0], start=row[1], end=row[2])
+        return dict(count=row[0], start=row[1], end=row[2], sampling_rate=row[3],
+                    missing_count=row[4], duplicate_count=row[5])
     count = 0
     start = end = None
     for t, _ in iter_chunks(path, name):
@@ -120,7 +165,58 @@ def metadata(path, name):
         if len(t):
             start = float(t[0]) if start is None else start
             end = float(t[-1])
-    return dict(count=count, start=start, end=end)
+    return dict(count=count, start=start, end=end, sampling_rate=None,
+                missing_count=0, duplicate_count=0)
+
+
+def all_metadata(path):
+    """Return quality metadata for every channel without loading sample blobs."""
+    with sqlite3.connect(path) as conn:
+        ensure_schema(conn)
+        rows = conn.execute('''SELECT p.name,m.count,m.start,m.end,m.sampling_rate,
+            m.missing_count,m.duplicate_count FROM parameters p
+            LEFT JOIN channel_meta m ON m.parameter_id=p.id ORDER BY p.name''').fetchall()
+    result = []
+    updates = []
+    for name, count, start, end, rate, missing, duplicate in rows:
+        if count is None:
+            item = metadata(path, name)
+        else:
+            if rate is None and count and count > 1:
+                rate, measured_missing = _measure_quality(path, name)
+                missing = measured_missing
+                updates.append((rate, missing, name))
+            item = dict(count=count, start=start, end=end, sampling_rate=rate,
+                        missing_count=missing, duplicate_count=duplicate)
+        result.append({'parameter': name, **item})
+    if updates:
+        with sqlite3.connect(path) as conn:
+            conn.executemany('''UPDATE channel_meta SET sampling_rate=?,missing_count=?
+                WHERE parameter_id=(SELECT id FROM parameters WHERE name=?)''', updates)
+    return result
+
+
+def _measure_quality(path, name):
+    """Backfill quality fields for databases created before schema v2."""
+    samples = np.array([], dtype=np.float64)
+    missing = 0
+    previous = None
+    for t, y in iter_chunks(path, name):
+        missing += int(np.isnan(y).sum())
+        dt = np.diff(t)
+        if previous is not None and t.size:
+            dt = np.r_[float(t[0]) - previous, dt]
+        if t.size:
+            previous = float(t[-1])
+        dt = dt[dt > 0]
+        if dt.size:
+            step = max(1, int(np.ceil(dt.size / 4096)))
+            samples = np.r_[samples, dt[::step]]
+            if samples.size > 100_000:
+                samples = samples[::int(np.ceil(samples.size / 100_000))]
+    if not samples.size:
+        return None, missing
+    return 1.0 / float(np.median(samples)), missing
 
 
 def iter_chunks(path, name, start=-np.inf, end=np.inf):
