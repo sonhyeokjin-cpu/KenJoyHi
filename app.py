@@ -24,7 +24,7 @@ from backend.filters import apply_lowpass_filter, apply_bandpass_filter, apply_m
 from backend.derived import execute_derived_parameter
 from backend.bit_extractor import create_bit_extracted_parameter, get_bit_extractor_info
 from backend.storage import all_metadata, metadata, statistics
-from backend.analysis import derived_channel, fft_channel, filter_channel
+from backend.analysis import derived_channel, fft_channel, filter_channel, unit_convert_channel
 from backend.jobs import cancel_job, public_job, submit_job
 import sqlite3
 import re
@@ -482,15 +482,11 @@ def get_data():
     parameter = request.args.get('parameter')
     start = float(request.args.get('start', -float('inf')))
     end = float(request.args.get('end', float('inf')))
-    # A chart request without a resolution is an overview request.  Never
-    # materialize millions of raw samples just to draw a screen-sized plot.
-    raw_requested = request.args.get('raw', '').lower() in ('1', 'true', 'yes')
-    resolution = None if raw_requested else request.args.get('resolution', type=int, default=2000)
     
     try:
-        logger.info(f"Fetching data for parameter: {parameter}, start: {start}, end: {end}, resolution: {resolution}")
+        logger.info(f"Fetching raw data for parameter: {parameter}, start: {start}, end: {end}")
         db_module = get_backend_module('db')
-        data = db_module['get_timeseries_data'](parameter, start, end, resolution=resolution)
+        data = db_module['get_timeseries_data'](parameter, start, end)
         logger.info(f"Retrieved data points: {len(data['time'])}")
         return jsonify(data)
     except Exception as e:
@@ -515,10 +511,9 @@ def apply_filter():
         # Get numpy first
         np = get_numpy()
             
-        # Get original data (always use level 0 for filtering)
-        # file_type='raw'로 호출하여 변환 전 time을 받음
+        # 필터 계산에도 전체 원본 샘플을 사용한다.
         db_module = get_backend_module('db')
-        data_ts = db_module['get_timeseries_data'](parameter, -np.inf, np.inf, file_type='raw')
+        data_ts = db_module['get_timeseries_data'](parameter, -np.inf, np.inf)
         if not data_ts or not data_ts['time'] or not data_ts['value']:
             return jsonify({'error': 'No data available for filtering'}), 400
             
@@ -693,6 +688,7 @@ _JOB_FUNCTIONS = {
     'filter': filter_channel,
     'derived': derived_channel,
     'fft': fft_channel,
+    'unit_convert': unit_convert_channel,
 }
 
 
