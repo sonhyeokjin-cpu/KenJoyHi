@@ -937,17 +937,6 @@
             white-space: pre-wrap;
         }
 
-        /* Min/Max 팝업 전용 스타일 */
-        #minmax-popup .popup-content {
-            padding: 20px;
-            max-width: 400px;
-        }
-        
-        #minmax-popup .popup-header {
-            margin-bottom: 10px;
-            padding-bottom: 8px;
-        }
-
         .chart-container.dragging {
             opacity: 0.5;
             box-shadow: 0 0 12px #2196F3;
@@ -1249,6 +1238,7 @@
             <div id="inspector-selection-summary" class="inspector-selection-summary">No chart selected</div>
             <div class="inspector-tabs" role="tablist" aria-label="Chart inspector sections">
                 <button class="inspector-tab active" type="button" data-inspector-tab="scale" role="tab" aria-selected="true">Scale</button>
+                <button class="inspector-tab" type="button" data-inspector-tab="minmax" role="tab" aria-selected="false">Min/Max</button>
                 <button class="inspector-tab" type="button" data-inspector-tab="filter" role="tab" aria-selected="false">Filter</button>
             </div>
             <div class="inspector-body">
@@ -1274,6 +1264,15 @@
                         <button id="resetYScale" class="btn secondary" type="button">Auto Y</button>
                         <button id="applyScale" class="btn primary" type="button">Apply Scale</button>
                     </div>
+                </section>
+
+                <section id="inspector-minmax-panel" class="inspector-panel" data-inspector-panel="minmax">
+                    <div class="inspector-section-heading">
+                        <h3>Range statistics</h3>
+                        <span>VISIBLE X RANGE</span>
+                    </div>
+                    <div id="minmax-status" class="inspector-note">Select a chart and run Min/Max to calculate exact values.</div>
+                    <div id="minmax-info-text" class="minmax-info-content inspector-minmax-results"></div>
                 </section>
 
                 <section id="inspector-filter-panel" class="inspector-panel" data-inspector-panel="filter">
@@ -1323,17 +1322,6 @@
                     <tbody id="quality-table-body"></tbody>
                 </table>
             </div>
-        </div>
-    </div>
-
-    <!-- Min/Max Popup -->
-    <div id="minmax-popup" class="popup" style="display: none;">
-        <div class="popup-content">
-            <div class="popup-header">
-                <h3>Min/Max Values</h3>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div id="minmax-info-text" class="minmax-info-content"></div>
         </div>
     </div>
 
