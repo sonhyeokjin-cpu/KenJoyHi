@@ -171,11 +171,8 @@ def process_matlab_v7(mat_data, file_type='regular'):
     if global_start_seconds >= global_end_seconds:
         logger.warning(f"Invalid time range: start={global_start_seconds}, end={global_end_seconds}")
     
-    # Channel samples are stored relative to the earliest channel timestamp.
-    # Keep the global range in that same coordinate system so API queries can
-    # actually return the samples used by the charts.
-    set_global_time(0.0, global_end_seconds - global_start_seconds,
-                    time_basis='relative_seconds')
+    set_global_time(global_start_seconds, global_end_seconds,
+                    time_basis='epoch_microseconds')
 
     global_start_time = min(first_times)
     for time_var in time_vars:
@@ -238,10 +235,8 @@ def process_matlab_v73(h5_data, file_type='regular'):
     if global_start_time == float('inf'):
         raise ValueError("Could not determine a global start time.")
 
-    # Channel samples below are stored relative to global_start_time.
-    # Persist the global range in the same relative-seconds basis.
-    set_global_time(0.0, (max_end_time - global_start_time) / time_divisor,
-                    time_basis='relative_seconds')
+    set_global_time(global_start_time / time_divisor, max_end_time / time_divisor,
+                    time_basis='epoch_microseconds')
     logger.info(f"Global time determined for v7.3: {global_start_time} to {max_end_time}")
 
     # Pass 2: Process each variable, chunking if necessary
