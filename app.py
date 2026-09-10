@@ -833,8 +833,27 @@ def download_database():
 def get_global_time_api():
     try:
         db_module = get_backend_module('db')
+        # start/end remain the original source clock for the header display.
         start, end = db_module['get_global_time']()
-        return jsonify({'start': start, 'end': end})
+        payload = {'start': start, 'end': end}
+
+        # Chart samples are stored relative to the earliest sample. Expose
+        # that range separately so the frontend never uses display timestamps
+        # as a query interval (which would produce an empty chart).
+        try:
+            data_start = db_module['get_global_start_time']()
+            data_end = db_module['get_global_end_time']()
+            if (data_start is not None and data_end is not None and
+                    float(data_start) < float(data_end)):
+                payload.update({
+                    'data_start': float(data_start),
+                    'data_end': float(data_end),
+                    'data_time_basis': 'relative_seconds'
+                })
+        except Exception as metadata_error:
+            logger.warning("Unable to derive chart data range: %s", metadata_error)
+
+        return jsonify(payload)
     except Exception as e:
         logger.error(f"Error fetching global time: {str(e)}")
         return jsonify({'error': str(e)}), 500
