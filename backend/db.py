@@ -350,6 +350,7 @@ def get_global_time():
             return 0.0, 0.0
     finally:
         conn.close()
+
 def ensure_time_segments_table():
     """Ensure the time_segments table exists in the database."""
     conn = sqlite3.connect(DB_PATH)
