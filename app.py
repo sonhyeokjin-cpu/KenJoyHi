@@ -23,7 +23,9 @@ from backend.db import DB_PATH
 from backend.filters import apply_lowpass_filter, apply_bandpass_filter, apply_moving_average, get_filter_info
 from backend.derived import execute_derived_parameter
 from backend.bit_extractor import create_bit_extracted_parameter, get_bit_extractor_info
-from backend.storage import metadata, statistics
+from backend.storage import all_metadata, metadata, statistics
+from backend.analysis import derived_channel, fft_channel, filter_channel
+from backend.jobs import cancel_job, public_job, submit_job
 import struct
 import sqlite3
 import re
@@ -676,6 +678,49 @@ def get_statistics():
     except Exception as e:
         logger.error(f"Error calculating statistics: {e}")
         return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/channel_quality')
+def get_channel_quality():
+    """Lightweight upload/data-quality summary for every stored channel."""
+    try:
+        return jsonify({'channels': all_metadata(DB_PATH)})
+    except Exception as e:
+        logger.error(f"Error loading channel quality: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+_JOB_FUNCTIONS = {
+    'filter': filter_channel,
+    'derived': derived_channel,
+    'fft': fft_channel,
+}
+
+
+@app.route('/api/jobs/<kind>', methods=['POST'])
+def create_analysis_job(kind):
+    function = _JOB_FUNCTIONS.get(kind)
+    if function is None:
+        return jsonify({'error': f'Unknown job type: {kind}'}), 404
+    payload = request.get_json(silent=True) or {}
+    job = submit_job(kind, function, payload)
+    return jsonify(job), 202
+
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+def get_analysis_job(job_id):
+    job = public_job(job_id)
+    if job is None:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
+
+
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def cancel_analysis_job(job_id):
+    job = cancel_job(job_id)
+    if job is None:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
 
 @app.route('/api/derived', methods=['POST'])
 def create_derived_parameter():
