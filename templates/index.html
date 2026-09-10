@@ -10,8 +10,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='js/uPlot.min.css') }}">
     <script src="{{ url_for('static', filename='js/uPlot.iife.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/html2canvas.min.js') }}"></script>
-    <!-- Optional Monaco/ECharts/GridStack assets are not bundled.  The UI
-         provides a textarea and disables Canvas mode when they are absent. -->
+    <!-- Monaco is optional; Canvas mode uses the bundled uPlot renderer. -->
     <script>
     // Dancing Script 폰트 로딩 보장
     if (window.FontFace) {
@@ -1211,8 +1210,8 @@
                 <!-- Charts will be added here -->
             </div>
             
-            <!-- Canvas Area (GridStack) -->
-            <div id="canvas-area" class="grid-stack" style="display: none; flex: 1; width: 100%; overflow-y: auto; padding: 10px; box-sizing: border-box;"></div>
+            <!-- Native resizable Canvas workspace -->
+            <div id="canvas-area" style="display: none;"></div>
 
             <!-- File Tab Notepad Area -->
             <div class="notepad-area" id="notepad-area" style="display: none;">
@@ -1237,6 +1236,77 @@
                 </div>
             </div>
         </div>
+
+        <!-- Contextual chart controls -->
+        <aside id="analysis-inspector" class="analysis-inspector" aria-hidden="true">
+            <div class="inspector-header">
+                <div>
+                    <span class="inspector-eyebrow">CONTEXTUAL CONTROLS</span>
+                    <h2 id="inspector-title">Chart Inspector</h2>
+                </div>
+                <button id="close-inspector" class="inspector-close" type="button" aria-label="Close inspector">×</button>
+            </div>
+            <div id="inspector-selection-summary" class="inspector-selection-summary">No chart selected</div>
+            <div class="inspector-tabs" role="tablist" aria-label="Chart inspector sections">
+                <button class="inspector-tab active" type="button" data-inspector-tab="scale" role="tab" aria-selected="true">Scale</button>
+                <button class="inspector-tab" type="button" data-inspector-tab="filter" role="tab" aria-selected="false">Filter</button>
+            </div>
+            <div class="inspector-body">
+                <section id="inspector-scale-panel" class="inspector-panel active" data-inspector-panel="scale">
+                    <div class="inspector-section-heading">
+                        <h3>X Axis</h3>
+                        <span>COMMON TO ALL CHARTS</span>
+                    </div>
+                    <div class="inspector-fields two-column">
+                        <label>Minimum<input type="number" id="xMin" step="any"></label>
+                        <label>Maximum<input type="number" id="xMax" step="any"></label>
+                    </div>
+                    <div class="inspector-section-heading">
+                        <h3>Y Axis</h3>
+                        <span>SELECTED CHARTS</span>
+                    </div>
+                    <div class="inspector-fields two-column">
+                        <label>Minimum<input type="number" id="yMin" step="any"></label>
+                        <label>Maximum<input type="number" id="yMax" step="any"></label>
+                    </div>
+                    <div class="inspector-note">X range is synchronized across all time-series charts. Y range applies only to the current selection.</div>
+                    <div class="inspector-actions">
+                        <button id="resetYScale" class="btn secondary" type="button">Auto Y</button>
+                        <button id="applyScale" class="btn primary" type="button">Apply Scale</button>
+                    </div>
+                </section>
+
+                <section id="inspector-filter-panel" class="inspector-panel" data-inspector-panel="filter">
+                    <div class="inspector-section-heading">
+                        <h3 id="active-filter-title">Filter</h3>
+                        <span>ONE CHANNEL REQUIRED</span>
+                    </div>
+                    <div class="filter-form inspector-filter-form">
+                        <div id="lpf-form" class="filter-form-content">
+                            <div class="form-group"><label for="lpf-cutoff">Cutoff frequency (Hz)</label><input type="number" id="lpf-cutoff" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="lpf-order">Filter order</label><input type="number" id="lpf-order" min="1" max="10" value="4"></div>
+                        </div>
+                        <div id="bpf-form" class="filter-form-content" style="display:none;">
+                            <div class="form-group"><label for="bpf-low">Lower frequency (Hz)</label><input type="number" id="bpf-low" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="bpf-high">Upper frequency (Hz)</label><input type="number" id="bpf-high" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="bpf-order">Filter order</label><input type="number" id="bpf-order" min="1" max="10" value="4"></div>
+                        </div>
+                        <div id="ma-form" class="filter-form-content" style="display:none;">
+                            <div class="form-group"><label for="ma-window">Window size (samples)</label><input type="number" id="ma-window" min="1" value="5"></div>
+                        </div>
+                        <div id="rms-form" class="filter-form-content" style="display:none;">
+                            <div class="form-group"><label for="rms-window">Window size (samples)</label><input type="number" id="rms-window" min="1" value="5"></div>
+                        </div>
+                        <button id="apply-filter" class="btn primary" type="button">Apply Filter</button>
+                    </div>
+                    <div id="filter-info-panel" class="filter-info-panel" hidden>
+                        <div class="inspector-section-heading"><h3>Filter response</h3><span>RESULT</span></div>
+                        <div id="filter-info-text" class="filter-info-text"></div>
+                        <div id="magnitude-chart" class="magnitude-chart"></div>
+                    </div>
+                </section>
+            </div>
+        </aside>
     </div>
 
     <!-- Channel quality summary -->
@@ -1286,84 +1356,6 @@
                 <button class="close-btn">&times;</button>
             </div>
             <div id="scatter-chart" style="width: 100%; height: 500px;"></div>
-        </div>
-    </div>
-
-    <!-- Filter Popup -->
-    <div id="filter-popup" class="popup" style="display: none;">
-        <div class="popup-content">
-            <div class="popup-header">
-                <h3>Filter Parameters</h3>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div class="filter-form">
-                <!-- LPF Form -->
-                <div id="lpf-form" class="filter-form-content">
-                    <div class="form-group">
-                        <label for="lpf-cutoff">Cutoff Frequency (Hz):</label>
-                        <input type="number" id="lpf-cutoff" min="0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label for="lpf-order">Filter Order:</label>
-                        <input type="number" id="lpf-order" min="1" max="10" value="4">
-                    </div>
-                </div>
-                
-                <!-- BPF Form -->
-                <div id="bpf-form" class="filter-form-content" style="display: none;">
-                    <div class="form-group">
-                        <label for="bpf-low">Lower Frequency (Hz):</label>
-                        <input type="number" id="bpf-low" min="0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label for="bpf-high">Upper Frequency (Hz):</label>
-                        <input type="number" id="bpf-high" min="0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label for="bpf-order">Filter Order:</label>
-                        <input type="number" id="bpf-order" min="1" max="10" value="4">
-                    </div>
-                </div>
-                
-                <!-- Moving Average Form -->
-                <div id="ma-form" class="filter-form-content" style="display: none;">
-                    <div class="form-group">
-                        <label for="ma-window">Window Size (samples):</label>
-                        <input type="number" id="ma-window" min="1" value="5">
-                    </div>
-                </div>
-                
-                <!-- RMS Form -->
-                <div id="rms-form" class="filter-form-content" style="display: none;">
-                    <div class="form-group">
-                        <label for="rms-window">Window Size (samples):</label>
-                        <input type="number" id="rms-window" min="1" value="5">
-                    </div>
-                </div>
-                
-                <button id="apply-filter" class="btn primary">Apply Filter</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filter Info Popup -->
-    <div id="filter-info-popup" class="popup" style="display: none;">
-        <div class="popup-content">
-            <div class="popup-header">
-                <h3>필터 정보</h3>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div class="filter-info">
-                <div class="filter-info-text-container">
-                    <pre id="filter-info-text"></pre>
-                </div>
-                <div class="filter-response-charts">
-                    <div class="chart-container">
-                        <h4>주파수 응답 (크기)</h4>
-                        <div id="magnitude-chart" style="width: 400px; height: 300px;"></div>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -1443,37 +1435,6 @@
       </div>
     </div>
 
-    <!-- Scale Dialog -->
-    <div id="scaleDialog" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Scale Settings</h2>
-                <span class="close">&times;</span>
-            </div>
-            <div class="scale-section">
-                <div class="input-group">
-                    <label>X-Axis (Selected Charts)</label>
-                    <div class="input-row">
-                        <input type="number" id="xMin" placeholder="Min">
-                        <input type="number" id="xMax" placeholder="Max">
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>Y-Axis (Selected Charts)</label>
-                    <div class="input-row">
-                        <input type="number" id="yMin" placeholder="Min">
-                        <input type="number" id="yMax" placeholder="Max">
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button id="cancelScale" class="btn btn-secondary">Cancel</button>
-                <button id="applyScale" class="btn btn-primary">Apply</button>
-            </div>
-        </div>
-    </div>
-    <!-- End Scale Dialog -->
-
     <!-- BIT Extractor Popup -->
     <div id="bit-extractor-popup" class="popup" style="display: none;">
         <div class="popup-content">
@@ -1534,59 +1495,6 @@
                         • LSB > MSB: 비트를 역순으로 추출 (예: LSB=7, MSB=3 → 7,6,5,4,3번 비트를 역순으로)<br>
                         <span style="color:#1976D2;font-weight:500;">Sign bit 반영 시, MSB Index입력범위에 포함되어야 합니다.</span>
                     </small>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Canvas Chart Settings Modal -->
-    <div id="canvas-settings-modal" class="popup" style="display: none;">
-        <div class="popup-content" style="max-width: 450px;">
-            <div class="popup-header">
-                <h3>Chart Settings</h3>
-                <button class="close-btn" onclick="document.getElementById('canvas-settings-modal').style.display='none'">&times;</button>
-            </div>
-            <div class="settings-form">
-                <input type="hidden" id="canvas-setting-chart-id">
-                
-                <div class="form-group">
-                    <label style="font-weight:600; color:#2196F3; margin-bottom:8px; display:block;">Interaction</label>
-                    <div style="display: flex; gap: 20px; margin-bottom: 15px;">
-                        <label><input type="checkbox" id="canvas-zoom-x"> Zoom/Pan X</label>
-                        <label><input type="checkbox" id="canvas-zoom-y"> Zoom/Pan Y</label>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label style="font-weight:600; color:#2196F3; margin-bottom:8px; display:block;">Legend</label>
-                    <div style="display: flex; gap: 20px; margin-bottom: 10px;">
-                        <label><input type="checkbox" id="canvas-legend-show"> Show</label>
-                        <label><input type="checkbox" id="canvas-legend-scroll"> Scrollable</label>
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
-                        <div>
-                            <label style="font-size:12px; color:#666;">Orientation</label>
-                            <select id="canvas-legend-orient" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select>
-                        </div>
-                        <div>
-                            <label style="font-size:12px; color:#666;">Placement</label>
-                            <select id="canvas-legend-placement" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="inside">Inside Chart</option><option value="outside">Outside Chart</option></select>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label style="font-size:12px; color:#666;">Position</label>
-                        <div style="display: flex; gap: 10px;">
-                            <select id="canvas-legend-pos-main" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="top">Top</option><option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option></select>
-                            <select id="canvas-legend-pos-align" class="cell-edit-input" style="border:1px solid #ddd; padding:5px; border-radius:4px;"><option value="start">Start (Left/Top)</option><option value="center">Center</option><option value="end">End (Right/Bottom)</option></select>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="form-actions" style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">
-                    <button class="btn secondary" onclick="document.getElementById('canvas-settings-modal').style.display='none'">Cancel</button>
-                    <button class="btn primary" onclick="applyCanvasSettings()">Apply</button>
                 </div>
             </div>
         </div>
@@ -2335,4 +2243,9 @@
                 <div class="form-actions">
                     <button type="button" class="btn secondary" id="save-config-cancel">Cancel</button>
                     <button type="submit" class="btn primary">Save File</button>
-      
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
