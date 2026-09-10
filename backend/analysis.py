@@ -3,6 +3,7 @@ import numpy as np
 
 from .db import DB_PATH, get_timeseries_data, save_timeseries_data
 from .derived import execute_derived_parameter
+from .storage import channel_writer, iter_chunks
 from .filters import (apply_bandpass_filter, apply_lowpass_filter,
                       apply_moving_average, apply_rms, get_filter_info)
 
@@ -108,6 +109,69 @@ def derived_channel(payload):
     save_timeseries_data(name, reference_time, result, 0)
     return {'message': 'Derived parameter created successfully', 'parameter': name,
             'alignment': policy}
+
+
+UNIT_DEFINITIONS = {
+    'length': {
+        'mm': (0.001, 0.0), 'cm': (0.01, 0.0), 'm': (1.0, 0.0),
+        'km': (1000.0, 0.0), 'ft': (0.3048, 0.0), 'in': (0.0254, 0.0),
+        'mile': (1609.344, 0.0),
+    },
+    'speed': {
+        'm/s': (1.0, 0.0), 'm/h': (1.0 / 3600.0, 0.0),
+        'km/s': (1000.0, 0.0), 'km/h': (1000.0 / 3600.0, 0.0),
+        'in/s': (0.0254, 0.0), 'in/h': (0.0254 / 3600.0, 0.0),
+        'ft/s': (0.3048, 0.0), 'ft/h': (0.3048 / 3600.0, 0.0),
+        'mi/s': (1609.344, 0.0), 'mi/h': (1609.344 / 3600.0, 0.0),
+        'knot': (1852.0 / 3600.0, 0.0), 'mach': (340.29, 0.0),
+    },
+    'temperature': {
+        '℃': (1.0, 0.0), '℉': (5.0 / 9.0, -32.0 * 5.0 / 9.0),
+    },
+    'pressure': {
+        'atm': (101325.0, 0.0), 'Pa': (1.0, 0.0), 'hPa': (100.0, 0.0),
+        'kPa': (1000.0, 0.0), 'MPa': (1_000_000.0, 0.0),
+        'mb': (100.0, 0.0), 'bar': (100000.0, 0.0),
+        'psi': (6894.757293168, 0.0), 'inchHg': (3386.389, 0.0),
+    },
+    'mass': {
+        'mg': (1e-6, 0.0), 'g': (0.001, 0.0), 'kg': (1.0, 0.0),
+        'oz': (0.028349523125, 0.0), 'lb': (0.45359237, 0.0),
+    },
+}
+
+
+def unit_convert_channel(payload):
+    source = str(payload.get('parameter') or '').strip()
+    target = str(payload.get('name') or '').strip()
+    quantity = payload.get('quantity')
+    source_unit = payload.get('source_unit')
+    target_unit = payload.get('target_unit')
+    if not source or not target:
+        raise ValueError('parameter and name are required')
+    if source == target:
+        raise ValueError('The converted parameter name must differ from the source')
+    units = UNIT_DEFINITIONS.get(quantity)
+    if not units or source_unit not in units or target_unit not in units:
+        raise ValueError('Unsupported quantity or unit')
+    if source_unit == target_unit:
+        raise ValueError('Source and target units must differ')
+
+    source_scale, source_offset = units[source_unit]
+    target_scale, target_offset = units[target_unit]
+    converted_count = 0
+    with channel_writer(DB_PATH, target) as writer:
+        for time, values in iter_chunks(DB_PATH, source):
+            base_values = np.asarray(values, dtype=np.float64) * source_scale + source_offset
+            converted = (base_values - target_offset) / target_scale
+            writer.append(time, converted)
+            converted_count += len(time)
+    return {
+        'message': 'Unit conversion completed', 'parameter': target,
+        'source_parameter': source, 'quantity': quantity,
+        'source_unit': source_unit, 'target_unit': target_unit,
+        'sample_count': converted_count, 'refresh_parameters': True,
+    }
 
 
 def fft_channel(payload):

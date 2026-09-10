@@ -11,7 +11,6 @@ let isRestoringLayout = false; // 차트 레이아웃 복원 중인지 여부 �
 let isFixedScale = false; // Fixed Scale 토글 상태
 let isShowDescription = false; // Show Description 토글 상태
 let lineAlphaPercent = 0; // 라인 투명도 (% 0~100)
-let isCanvasMode = false; // Canvas mode state
 let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linear';
 
 async function runBackgroundJob(kind, payload) {
@@ -130,18 +129,6 @@ function arrayMax(arr) {
     return arr.reduce((max, v) => v > max ? v : max, arr[0]);
 }
 
-// 대용량 시계열 다운샘플링 (버킷 min/max) 및 점진 렌더링 유틸
-function getChartPixelWidth(uPlotInstance) {
-    try {
-        const w = uPlotInstance?.root?.getBoundingClientRect?.().width;
-        return (w && isFinite(w)) ? Math.floor(w) : 800;
-    } catch (_) {
-        return 800;
-    }
-}
-
-
-
 // DOM Elements
 const fileInput = document.getElementById('file-input');
 const uploadBtn = document.getElementById('upload-btn');
@@ -162,6 +149,7 @@ const scatterPopup = document.getElementById('scatter-popup');
 const scatterChartElement = document.getElementById('scatter-chart');
 const parameterSearchInput = document.getElementById('parameter-search-input');
 const clearParameterSearchBtn = document.getElementById('clear-parameter-search');
+const unitConvertBtn = document.getElementById('unit-convert-btn');
 
 function setDatasetStatus(fileName, state = 'ready') {
     const fileLabel = document.getElementById('status-file-name');
@@ -214,21 +202,70 @@ const filterInfoPanel = document.getElementById('filter-info-panel');
 const filterInfoText = document.getElementById('filter-info-text');
 
 let currentFilterType = null;
+let unitConversionSelectionMode = false;
+let selectedUnitParameter = null;
+
+const UNIT_GROUPS = {
+    length: { label: '길이', units: ['mm', 'cm', 'm', 'km', 'ft', 'in', 'mile'] },
+    speed: { label: '속도', units: ['m/s', 'm/h', 'km/s', 'km/h', 'in/s', 'in/h', 'ft/s', 'ft/h', 'mi/s', 'mi/h', 'knot', 'mach'] },
+    temperature: { label: '온도', units: ['℃', '℉'] },
+    pressure: { label: '압력', units: ['atm', 'Pa', 'hPa', 'kPa', 'MPa', 'mb', 'bar', 'psi', 'inchHg'] },
+    mass: { label: '무게', units: ['mg', 'g', 'kg', 'oz', 'lb'] }
+};
+
+function unitNameSuffix(unit) {
+    if (unit === '℃') return 'degC';
+    if (unit === '℉') return 'degF';
+    return unit.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function updateUnitDefaultName(force = false) {
+    const nameInput = document.getElementById('unit-parameter-name');
+    const targetUnit = document.getElementById('unit-target-unit')?.value;
+    if (!nameInput || !selectedUnitParameter || !targetUnit) return;
+    if (force || nameInput.dataset.autoName === 'true' || !nameInput.value.trim()) {
+        nameInput.value = `${selectedUnitParameter}_${unitNameSuffix(targetUnit)}`;
+        nameInput.dataset.autoName = 'true';
+    }
+}
+
+function populateUnitSelectors() {
+    const quantity = document.getElementById('unit-quantity-type')?.value || 'length';
+    const sourceSelect = document.getElementById('unit-source-unit');
+    const targetSelect = document.getElementById('unit-target-unit');
+    const units = UNIT_GROUPS[quantity]?.units || [];
+    if (!sourceSelect || !targetSelect) return;
+    sourceSelect.innerHTML = units.map(unit => `<option value="${unit}">${unit}</option>`).join('');
+    targetSelect.innerHTML = units.map(unit => `<option value="${unit}">${unit}</option>`).join('');
+    if (units.length > 1) targetSelect.selectedIndex = 1;
+    updateUnitDefaultName();
+}
+
+function selectUnitConversionParameter(parameter) {
+    selectedUnitParameter = parameter;
+    const source = document.getElementById('unit-source-parameter');
+    const applyButton = document.getElementById('apply-unit-conversion');
+    const status = document.getElementById('unit-conversion-status');
+    if (source) {
+        source.textContent = parameter;
+        source.classList.remove('empty');
+    }
+    if (applyButton) applyButton.disabled = false;
+    if (status) {
+        status.textContent = '파라미터가 선택되었습니다. 단위를 지정한 후 변환을 실행하세요.';
+        status.classList.remove('error');
+    }
+    updateUnitDefaultName(true);
+    updateInspectorSelection();
+}
 
 function updateInspectorSelection() {
     const summary = document.getElementById('inspector-selection-summary');
     if (!summary) return;
-    if (isCanvasMode) {
-        const canvasRecord = canvasCharts.get(selectedCanvasWidgetId);
-        if (!canvasRecord) {
-            summary.textContent = 'Canvas workspace active · No chart selected';
-            return;
-        }
-        const names = canvasRecord.parameters || [];
-        const channelSummary = names.length
-            ? names.slice(0, 3).join(' · ') + (names.length > 3 ? ` +${names.length - 3}` : '')
-            : 'Empty chart';
-        summary.textContent = `Canvas chart · ${channelSummary}`;
+    if (unitConversionSelectionMode) {
+        summary.textContent = selectedUnitParameter
+            ? `단위환산 원본 · ${selectedUnitParameter}`
+            : '단위환산 · 왼쪽 목록에서 파라미터 선택';
         return;
     }
     const selected = charts.filter(chart =>
@@ -245,6 +282,7 @@ function updateInspectorSelection() {
 }
 
 function setInspectorTab(tabName) {
+    unitConversionSelectionMode = tabName === 'unit';
     document.querySelectorAll('.inspector-tab').forEach(tab => {
         const active = tab.dataset.inspectorTab === tabName;
         tab.classList.toggle('active', active);
@@ -253,14 +291,12 @@ function setInspectorTab(tabName) {
     document.querySelectorAll('.inspector-panel').forEach(panel => {
         panel.classList.toggle('active', panel.dataset.inspectorPanel === tabName);
     });
+    if (unitConversionSelectionMode) populateUnitSelectors();
+    updateInspectorSelection();
 }
 
 function resizeVisibleCharts() {
-    if (isCanvasMode) {
-        resizeCanvasCharts();
-    } else {
-        updateGridLayout();
-    }
+    updateGridLayout();
 }
 
 function openInspector(tabName = 'scale') {
@@ -276,12 +312,88 @@ function closeInspector() {
     if (!analysisInspector) return;
     analysisInspector.classList.remove('open');
     analysisInspector.setAttribute('aria-hidden', 'true');
+    unitConversionSelectionMode = false;
     setTimeout(resizeVisibleCharts, 220);
 }
 
 document.getElementById('close-inspector')?.addEventListener('click', closeInspector);
 document.querySelectorAll('.inspector-tab').forEach(tab => {
     tab.addEventListener('click', () => setInspectorTab(tab.dataset.inspectorTab));
+});
+
+unitConvertBtn?.addEventListener('click', () => {
+    openInspector('unit');
+    populateUnitSelectors();
+    const status = document.getElementById('unit-conversion-status');
+    if (status && !selectedUnitParameter) {
+        status.textContent = '왼쪽 채널 목록에서 변환할 파라미터를 클릭하세요.';
+    }
+});
+
+document.getElementById('unit-quantity-type')?.addEventListener('change', () => {
+    populateUnitSelectors();
+    updateUnitDefaultName(true);
+});
+document.getElementById('unit-target-unit')?.addEventListener('change', () => updateUnitDefaultName());
+document.getElementById('unit-parameter-name')?.addEventListener('input', event => {
+    event.target.dataset.autoName = 'false';
+});
+document.getElementById('apply-unit-conversion')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const quantity = document.getElementById('unit-quantity-type')?.value;
+    const sourceUnit = document.getElementById('unit-source-unit')?.value;
+    const targetUnit = document.getElementById('unit-target-unit')?.value;
+    const name = document.getElementById('unit-parameter-name')?.value.trim();
+    const status = document.getElementById('unit-conversion-status');
+    if (!selectedUnitParameter || !quantity || !sourceUnit || !targetUnit || !name) {
+        if (status) {
+            status.textContent = '파라미터, 물리량, 단위와 새 이름을 모두 지정하세요.';
+            status.classList.add('error');
+        }
+        return;
+    }
+    if (sourceUnit === targetUnit) {
+        if (status) {
+            status.textContent = '현재 단위와 변환 단위는 서로 달라야 합니다.';
+            status.classList.add('error');
+        }
+        return;
+    }
+    if (name === selectedUnitParameter) {
+        if (status) {
+            status.textContent = '새 파라미터 이름은 원본과 달라야 합니다.';
+            status.classList.add('error');
+        }
+        return;
+    }
+
+    button.disabled = true;
+    if (status) {
+        status.textContent = '원본 샘플을 변환하고 있습니다…';
+        status.classList.remove('error');
+    }
+    try {
+        const result = await runBackgroundJob('unit_convert', {
+            parameter: selectedUnitParameter,
+            name,
+            quantity,
+            source_unit: sourceUnit,
+            target_unit: targetUnit
+        });
+        if (status) {
+            status.textContent = `${result.parameter} 생성 완료 · ${Number(result.sample_count || 0).toLocaleString()} samples`;
+        }
+        await loadParameters();
+        showNotification(`단위환산 파라미터 ${result.parameter} 생성 완료`);
+    } catch (error) {
+        if (status) {
+            status.textContent = `변환 실패: ${error.message}`;
+            status.classList.add('error');
+        }
+        showNotification('단위환산 실패: ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
 });
 
 // Tab switching
@@ -298,14 +410,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 
         if (tab.dataset.tab === 'plot') {
             notepadArea.style.display = 'none';
-            const canvasArea = document.getElementById('canvas-area');
-            if (isCanvasMode) {
-                plotArea.style.display = 'none';
-                if (canvasArea) canvasArea.style.display = 'flex';
-            } else {
-                plotArea.style.display = 'grid';
-                if (canvasArea) canvasArea.style.display = 'none';
-            }
+            plotArea.style.display = 'grid';
             
             loadParameters();
             
@@ -557,6 +662,10 @@ async function loadParameters() {
                 derivedParaBtn.classList.add('disabled');
                 derivedParaBtn.classList.remove('primary');
             }
+            if (unitConvertBtn) {
+                unitConvertBtn.disabled = true;
+                unitConvertBtn.classList.add('disabled');
+            }
             return;
         }
         
@@ -588,14 +697,8 @@ async function loadParameters() {
 
             item.addEventListener('click', (e) => {
                 // 파생파라미터 에디터가 열려 있으면 에디터에만 삽입
-                if (isCanvasMode) {
-                    const targetId = selectedCanvasWidgetId || canvasCharts.keys().next().value;
-                    if (targetId) {
-                        selectCanvasWidget(targetId);
-                        addParameterToCanvasWidget(targetId, item.dataset.parameter);
-                    } else {
-                        showNotification('Add or select a Canvas chart first.', 'error');
-                    }
+                if (unitConversionSelectionMode) {
+                    selectUnitConversionParameter(item.dataset.parameter);
                 } else if (document.getElementById('derived-panel') && document.getElementById('derived-panel').classList.contains('visible')) {
                     if (window.monacoEditor) {
                         const text = item.dataset.parameter;
@@ -624,6 +727,10 @@ async function loadParameters() {
             derivedParaBtn.disabled = false;
             derivedParaBtn.classList.remove('disabled');
             derivedParaBtn.classList.add('primary');
+        }
+        if (unitConvertBtn) {
+            unitConvertBtn.disabled = false;
+            unitConvertBtn.classList.remove('disabled');
         }
         
         // Time Segment 버튼 활성화
@@ -1009,17 +1116,6 @@ window.addEventListener('DOMContentLoaded', () => {
         utilityAppsBtn.addEventListener('click', showBitExtractorPopup);
         dataToolbarGroup.appendChild(utilityAppsBtn);
 
-        // Canvas Button 생성
-        if (!document.getElementById('canvas-btn')) {
-            const canvasBtn = document.createElement('button');
-            canvasBtn.id = 'canvas-btn';
-            canvasBtn.className = 'btn';
-            canvasBtn.textContent = 'Canvas';
-            canvasBtn.style.whiteSpace = 'nowrap';
-            
-            viewToolbarGroup.appendChild(canvasBtn);
-            canvasBtn.addEventListener('click', toggleCanvasMode);
-        }
     }
 
     // 초기 비활성화 버튼들
@@ -1053,22 +1149,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Add Chart 버튼 클릭 시 최대 25개까지 추가
 addChartBtn.addEventListener('click', () => {
-    if (isCanvasMode) {
-        addCanvasChart();
-    } else {
-        if (charts.length < MAX_CHARTS) {
-            createChart();
-            updateGridLayout();
-        }
+    if (charts.length < MAX_CHARTS) {
+        createChart();
+        updateGridLayout();
     }
 });
 
 // 차트 삭제 시 빈 타일 유지 (DOM에서만 제거, grid cell은 유지)
 window.addEventListener('keydown', (e) => {
-    if (e.key === 'Delete' && isCanvasMode && selectedCanvasWidgetId) {
-        document.getElementById(selectedCanvasWidgetId)?.querySelector('.canvas-remove-btn')?.click();
-        return;
-    }
     if (e.key === 'Delete' && (selectedChart || selectedCharts.length > 0)) {
         // 여러 차트가 선택된 경우 모든 선택된 차트 삭제
         const chartsToDelete = selectedCharts.length > 0 ? selectedCharts : [selectedChart];
@@ -1233,9 +1321,8 @@ function createChart() {
         const chart = charts.find(c => c.id === chartId);
         if (chart && chart.initialScale) {
             chart.plot.setScale('x', chart.initialScale);
-            // Re-fetch overview data for the full range
-            const overviewResolution = 2000;
-            updateChartData(chartId, chart.parameters, chart.initialScale.min, chart.initialScale.max, overviewResolution);
+        // Re-fetch every original sample for the full range.
+        updateChartData(chartId, chart.parameters, chart.initialScale.min, chart.initialScale.max);
         }
     });
     
@@ -1392,7 +1479,6 @@ function createChart() {
         isRestoringZoom: false,
         dataRequestVersion: 0,
         loadedRange: null,
-        loadedResolution: null,
         initialScale: null,
         data: {
             time: new Float64Array(0),
@@ -1538,39 +1624,7 @@ function calculateScaleDifference(data1, data2) {
     return ratio;
 }
 
-const RAW_RENDER_SAMPLE_LIMIT = 200000;
-const MAX_SHARED_TIME_POINTS = 250000;
 const RANGE_RELOAD_DEBOUNCE_MS = 250;
-
-async function fetchRangeSampleCount(parameter, start, end) {
-    const response = await fetch(`/api/data_count?parameter=${encodeURIComponent(parameter)}&start=${start}&end=${end}`);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Failed to count visible samples');
-    return Math.max(0, Number(body.count) || 0);
-}
-
-async function chooseVisibleRangeResolution(parameters, start, end, pixelWidth) {
-    try {
-        const counts = await Promise.all(parameters.map(parameter =>
-            fetchRangeSampleCount(parameter, start, end)));
-        const totalSamples = counts.reduce((sum, count) => sum + count, 0);
-        if (totalSamples <= RAW_RENDER_SAMPLE_LIMIT) {
-            return { resolution: 0, totalSamples, representation: 'raw' };
-        }
-        return {
-            resolution: Math.min(10000, Math.max(500, Math.ceil(pixelWidth * 2))),
-            totalSamples,
-            representation: 'envelope'
-        };
-    } catch (error) {
-        console.warn('Sample count unavailable; using bounded envelope:', error);
-        return {
-            resolution: Math.min(10000, Math.max(500, Math.ceil(pixelWidth * 2))),
-            totalSamples: null,
-            representation: 'envelope'
-        };
-    }
-}
 
 function sameRange(a, b) {
     if (!a || !b) return false;
@@ -1589,16 +1643,14 @@ function scheduleChartRangeReload(chartId, plot) {
     clearTimeout(chart.updateTimeout);
     chart.updateTimeout = setTimeout(async () => {
         const requestedRange = { min, max };
-        const choice = await chooseVisibleRangeResolution(
-            chart.parameters, min, max, getChartPixelWidth(chart.plot));
-        if (sameRange(chart.loadedRange, requestedRange) && chart.loadedResolution === choice.resolution) return;
+        if (sameRange(chart.loadedRange, requestedRange)) return;
         chart.lastZoom = requestedRange;
-        await updateChartData(chartId, chart.parameters, min, max, choice.resolution);
+        await updateChartData(chartId, chart.parameters, min, max);
     }, RANGE_RELOAD_DEBOUNCE_MS);
 }
 
 // 차트 데이터 업데이트 함수 수정
-async function updateChartData(chartId, parameters, start, end, resolution) {
+async function updateChartData(chartId, parameters, start, end) {
     const chart = charts.find(c => c.id === chartId);
     if (!chart || !parameters || parameters.length === 0) return;
     const requestVersion = (chart.dataRequestVersion || 0) + 1;
@@ -1617,11 +1669,11 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
         }
 
         try {
-            const dataPromises = parameters.map(param => fetchChartData(param, startParam, endParam, resolution));
+            const dataPromises = parameters.map(param => fetchChartData(param, startParam, endParam));
             const allData = await Promise.all(dataPromises);
             if (requestVersion !== chart.dataRequestVersion) return;
 
-            const timeData = buildCanvasReferenceTime(allData);
+            const timeData = buildSharedTimeAxis(allData);
             // Preserve every returned channel timestamp on a shared axis,
             // then align the individual value arrays to that union.
             const valueData = allData.map(data => alignSeries(timeData, data.time, data.value));
@@ -1636,7 +1688,6 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
 
             chart.plot.setData(plotData);
             chart.loadedRange = { min: Number(startParam), max: Number(endParam) };
-            chart.loadedResolution = resolution === undefined || resolution === null ? 2000 : resolution;
 
             if (isFixedScale && parameters.length >= 1) {
                 const config = (window.configData || []).find(c => c.parameter_name === parameters[0]);
@@ -1676,10 +1727,8 @@ async function updateChart(chartId, parameter) {
 
         updateChartTitle(chart);
 
-        // Fetch a bounded overview; raw samples are requested only by an
-        // analysis operation that explicitly needs them.
-        const overviewResolution = 2000;
-        const data = await fetchChartData(parameter, -Infinity, Infinity, overviewResolution);
+        // 전체 원본 샘플을 가져온다.
+        const data = await fetchChartData(parameter, -Infinity, Infinity);
 
         if (data.time && data.time.length > 0) {
             const initialScale = {
@@ -1691,11 +1740,11 @@ async function updateChart(chartId, parameter) {
             chart.lastZoom = initialScale;
 
             // Update the chart with the full data
-            await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max, overviewResolution);
+            await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max);
 
             chart.plot.setScale('x', initialScale);
 
-            console.log('Initial scale set with overview data:', {
+            console.log('Initial scale set with raw data:', {
                 chartId,
                 parameters: chart.parameters,
                 min: initialScale.min,
@@ -1709,6 +1758,24 @@ async function updateChart(chartId, parameter) {
         titleElement.textContent = `Error: ${error.message}`;
     }
     updateButtonStates();
+}
+
+function buildSharedTimeAxis(datasets) {
+    const merged = [];
+    datasets.forEach(data => {
+        for (const value of (data.time || [])) {
+            const timestamp = Number(value);
+            if (Number.isFinite(timestamp)) merged.push(timestamp);
+        }
+    });
+    merged.sort((a, b) => a - b);
+    const unique = [];
+    let previous;
+    merged.forEach(timestamp => {
+        if (!unique.length || timestamp !== previous) unique.push(timestamp);
+        previous = timestamp;
+    });
+    return new Float64Array(unique);
 }
 
 function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignmentPolicy) {
@@ -1739,16 +1806,11 @@ function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignment
     return out;
 }
 
-async function fetchChartData(parameter, start, end, resolution) {
+async function fetchChartData(parameter, start, end) {
     const startParam = (start === null || start === undefined) ? -Infinity : start;
     const endParam = (end === null || end === undefined) ? Infinity : end;
     
-    let url = `/api/data?parameter=${encodeURIComponent(parameter)}&start=${startParam}&end=${endParam}`;
-    if (resolution === 0) {
-        url += '&raw=1';
-    } else if (resolution !== null && resolution !== undefined) {
-        url += `&resolution=${resolution}`;
-    }
+    const url = `/api/data?parameter=${encodeURIComponent(parameter)}&start=${startParam}&end=${endParam}`;
 
     try {
         const response = await fetch(url);
@@ -1990,25 +2052,6 @@ function createFFTChart(frequencies, magnitudes, parameter) {
 
 // 버튼 상태 업데이트 함수 수정
 function updateButtonStates() {
-    if (isCanvasMode) {
-        const canvasRecord = canvasCharts.get(selectedCanvasWidgetId);
-        const hasCanvasData = Boolean(canvasRecord?.parameters?.length);
-        scaleBtn.disabled = true;
-        fftBtn.disabled = true;
-        filterBtn.disabled = true;
-        scatterBtn.disabled = true;
-        minmaxBtn.disabled = !hasCanvasData;
-        scaleBtn.classList.add('disabled');
-        fftBtn.classList.add('disabled');
-        fftBtn.classList.remove('primary');
-        filterBtn.classList.add('disabled');
-        filterBtn.classList.remove('primary');
-        scatterBtn.classList.add('disabled');
-        minmaxBtn.classList.toggle('disabled', !hasCanvasData);
-        updateInspectorSelection();
-        return;
-    }
-
     // 복수 차트 선택 시 Min/Max, FFT, Filter 비활성화
     if (selectedCharts.length > 1) {
         minmaxBtn.disabled = true;
@@ -2599,11 +2642,9 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
     }
 });
 
-// Min/Max analysis is shared by standard charts and Canvas charts.
-async function performMinMaxAnalysis(chartId, canvasTarget = false) {
-    const chart = canvasTarget
-        ? canvasCharts.get(chartId)
-        : charts.find(c => c.id === chartId);
+// Min/Max analysis for the selected standard chart.
+async function performMinMaxAnalysis(chartId) {
+    const chart = charts.find(c => c.id === chartId);
     if (!chart || chart.parameters.length === 0 || !chart.plot) return;
 
     try {
@@ -2618,8 +2659,7 @@ async function performMinMaxAnalysis(chartId, canvasTarget = false) {
             throw new Error('The selected chart does not have a valid visible time range');
         }
 
-        // Exact statistics are computed chunk-wise on the server; no
-        // downsampling can hide a narrow spike.
+        // 서버가 원본 샘플을 청크 단위로 읽어 정확한 통계를 계산한다.
         const responses = await Promise.all(chart.parameters.map(async parameter => {
             const response = await fetch(`/api/statistics?parameter=${encodeURIComponent(parameter)}&start=${start}&end=${end}`);
             const body = await response.json();
@@ -2671,11 +2711,7 @@ async function performMinMaxAnalysis(chartId, canvasTarget = false) {
 
 // Min/Max 버튼 클릭 이벤트
 minmaxBtn.addEventListener('click', () => {
-    if (isCanvasMode && selectedCanvasWidgetId) {
-        performMinMaxAnalysis(selectedCanvasWidgetId, true);
-    } else if (selectedChart) {
-        performMinMaxAnalysis(selectedChart, false);
-    }
+    if (selectedChart) performMinMaxAnalysis(selectedChart);
 });
 
 // 화면 캡처 함수 구현
@@ -2849,12 +2885,12 @@ document.addEventListener('DOMContentLoaded', function() {
         generateBtn.addEventListener('click', async function() {
             const parameterName = document.getElementById('parameter-name').value.trim();
             if (!parameterName) {
-                alert('Please enter a parameter name');
+                alert('새 파라미터 이름을 입력하세요.');
                 return;
             }
             const code = window.monacoEditor.getValue();
             if (!code) {
-                alert('Please enter some code');
+                alert('계산식을 입력하세요.');
                 return;
             }
             // Get available parameters from the list
@@ -2873,13 +2909,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     alignment: alignmentPolicy
                 });
                 if (data) {
-                    alert('Parameter generated successfully');
+                    alert('파생 파라미터가 생성되었습니다.');
                     document.getElementById('derived-panel').classList.remove('visible');
                     document.getElementById('derived-panel').style.width = '600px'; // 패널 너비 복원
                     if (typeof loadParameters === 'function') loadParameters();
                 }
             } catch (error) {
-                alert('Error: ' + error.message);
+                alert('생성 실패: ' + error.message);
             }
         });
     }
@@ -5626,378 +5662,4 @@ function pasteToSelectedRow() {
     });
     updateConfigTable();
     showNotification('Row pasted!');
-}
-
-// Canvas Mode Functions
-// Native implementation: bundled uPlot only; no optional runtime dependency.
-const canvasCharts = new Map();
-let selectedCanvasWidgetId = null;
-
-function toggleCanvasMode() {
-    isCanvasMode = !isCanvasMode;
-    const canvasBtn = document.getElementById('canvas-btn');
-    const plotArea = document.getElementById('plot-area');
-    const canvasArea = document.getElementById('canvas-area');
-    if (!canvasArea || !plotArea) return;
-
-    canvasBtn?.classList.toggle('primary', isCanvasMode);
-    plotArea.style.display = isCanvasMode ? 'none' : 'grid';
-    canvasArea.style.display = isCanvasMode ? 'flex' : 'none';
-
-    if (isCanvasMode) {
-        if (canvasCharts.size === 0) addCanvasChart();
-        else if (!selectedCanvasWidgetId) selectCanvasWidget(canvasCharts.keys().next().value);
-        showNotification('Canvas workspace enabled. Select a card, then click or drag a channel.');
-        resizeCanvasCharts();
-    } else {
-        selectedCanvasWidgetId = null;
-        updateGridLayout();
-    }
-    updateButtonStates();
-}
-
-const canvasSeriesColors = [
-    '#0284c7', '#ea580c', '#16a34a', '#7c3aed', '#dc2626', '#0891b2',
-    '#ca8a04', '#db2777', '#4f46e5', '#059669', '#9333ea', '#475569'
-];
-
-function canvasSeriesColor(index) {
-    return canvasSeriesColors[index % canvasSeriesColors.length];
-}
-
-function canvasPlotOptions(host, parameters = [], record = null) {
-    const hostStyle = getComputedStyle(host);
-    const width = host.clientWidth - parseFloat(hostStyle.paddingLeft) - parseFloat(hostStyle.paddingRight);
-    const height = host.clientHeight - parseFloat(hostStyle.paddingTop) - parseFloat(hostStyle.paddingBottom);
-    const valueSeries = parameters.length
-        ? parameters.map((parameter, index) => ({
-            label: parameter,
-            stroke: canvasSeriesColor(index),
-            width: 1.25,
-            points: { show: false }
-        }))
-        : [{ label: '', show: false }];
-    return {
-        width: Math.max(320, Math.floor(width || 480)),
-        height: Math.max(180, Math.floor(height || 250)),
-        cursor: {
-            show: true,
-            sync: { key: 'shared' },
-            drag: { setScale: true, x: true, y: false }
-        },
-        legend: { show: false },
-        scales: { x: { time: false, auto: true }, y: { auto: true } },
-        axes: [
-            { scale: 'x', stroke: '#475569', grid: { stroke: '#e2e8f0', width: 1 }, size: 30 },
-            { scale: 'y', stroke: '#0284c7', grid: { stroke: '#edf2f7', width: 1 }, size: 42 }
-        ],
-        series: [{ label: 'Time' }, ...valueSeries],
-        padding: [8, 8, 6, 6],
-        hooks: {
-            setScale: [(plot, scaleKey) => {
-                if (scaleKey === 'x' && record) scheduleCanvasRangeReload(record, plot);
-            }]
-        }
-    };
-}
-
-function createCanvasPlot(record, referenceTime = new Float64Array(0), values = [], parameters = [], xScale = record.initialScale) {
-    record.suppressRangeReload = true;
-    try {
-        record.plot?.destroy();
-        const plotData = parameters.length
-            ? [referenceTime, ...values]
-            : [new Float64Array(0), new Float64Array(0)];
-        record.plot = new uPlot(canvasPlotOptions(record.host, parameters, record), plotData, record.host);
-        if (xScale && Number.isFinite(xScale.min) && Number.isFinite(xScale.max)) {
-            record.plot.setScale('x', xScale);
-        }
-    } finally {
-        record.suppressRangeReload = false;
-    }
-}
-
-function scheduleCanvasRangeReload(record, plot) {
-    const min = Number(plot?.scales?.x?.min);
-    const max = Number(plot?.scales?.x?.max);
-    if (!record?.parameters?.length || record.suppressRangeReload ||
-        !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
-
-    clearTimeout(record.rangeReloadTimeout);
-    record.rangeReloadTimeout = setTimeout(async () => {
-        const requestedRange = { min, max };
-        const choice = await chooseVisibleRangeResolution(
-            record.parameters, min, max, Math.max(320, record.plot?.width || record.host.clientWidth));
-        if (sameRange(record.loadedRange, requestedRange) && record.loadedResolution === choice.resolution) return;
-        await reloadCanvasVisibleRange(record, min, max, choice.resolution);
-    }, RANGE_RELOAD_DEBOUNCE_MS);
-}
-
-async function reloadCanvasVisibleRange(record, start, end, resolution) {
-    const parameters = [...record.parameters];
-    const version = ++record.loadVersion;
-    record.element.classList.add('loading');
-    try {
-        const datasets = await Promise.all(parameters.map(name =>
-            fetchChartData(name, start, end, resolution)));
-        if (version !== record.loadVersion) return;
-        const referenceTime = buildCanvasReferenceTime(datasets);
-        if (!referenceTime.length) {
-            record.time = new Float64Array(0);
-            record.values = parameters.map(() => new Float64Array(0));
-        } else {
-            record.time = referenceTime;
-            record.values = datasets.map(data =>
-                alignSeries(referenceTime, data.time || [], data.value || []));
-        }
-        record.loadedRange = { min: start, max: end };
-        record.loadedResolution = resolution;
-        createCanvasPlot(record, record.time, record.values, parameters, record.loadedRange);
-    } catch (error) {
-        if (version !== record.loadVersion) return;
-        console.error('Canvas range update failed:', error);
-        showNotification('Canvas zoom update error: ' + error.message, 'error');
-    } finally {
-        if (version === record.loadVersion) record.element.classList.remove('loading');
-    }
-}
-
-function renderCanvasChannelStrip(record) {
-    const strip = record.element.querySelector('.canvas-channel-strip');
-    if (!strip) return;
-    strip.innerHTML = record.parameters.map((parameter, index) =>
-        `<span class="canvas-channel-chip" style="--channel-color:${canvasSeriesColor(index)}" title="${escapeHtml(parameter)}">` +
-            `<span>${escapeHtml(parameter)}</span>` +
-            `<button type="button" data-canvas-parameter="${escapeHtml(parameter)}" aria-label="Remove ${escapeHtml(parameter)}">×</button>` +
-        '</span>'
-    ).join('');
-    strip.hidden = record.parameters.length === 0;
-    strip.querySelectorAll('[data-canvas-parameter]').forEach(button => {
-        button.addEventListener('click', event => {
-            event.stopPropagation();
-            removeParameterFromCanvasWidget(record.id, button.dataset.canvasParameter);
-        });
-    });
-}
-
-function buildCanvasReferenceTime(datasets) {
-    const merged = [];
-    datasets.forEach(data => {
-        for (const value of (data.time || [])) {
-            const timestamp = Number(value);
-            if (Number.isFinite(timestamp)) merged.push(timestamp);
-        }
-    });
-    if (!merged.length) return new Float64Array(0);
-    merged.sort((a, b) => a - b);
-    const unique = [];
-    let previous;
-    merged.forEach(timestamp => {
-        if (!unique.length || timestamp !== previous) unique.push(timestamp);
-        previous = timestamp;
-    });
-    if (unique.length <= MAX_SHARED_TIME_POINTS) return new Float64Array(unique);
-
-    // Keep a bounded, monotonically increasing axis for extremely dense
-    // overview requests. Narrow ranges switch to raw mode before this path.
-    const reference = new Float64Array(MAX_SHARED_TIME_POINTS);
-    const last = unique.length - 1;
-    for (let index = 0; index < MAX_SHARED_TIME_POINTS; index += 1) {
-        reference[index] = unique[Math.round(index * last / (MAX_SHARED_TIME_POINTS - 1))];
-    }
-    return reference;
-}
-
-function selectCanvasWidget(widgetId) {
-    selectedCanvasWidgetId = widgetId;
-    canvasCharts.forEach(record => record.element.classList.toggle('selected', record.id === widgetId));
-    updateButtonStates();
-}
-
-function addCanvasChart() {
-    const canvasArea = document.getElementById('canvas-area');
-    if (!canvasArea || canvasCharts.size >= MAX_CHARTS) return;
-
-    const widgetId = 'canvas-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7);
-    const widget = document.createElement('article');
-    widget.id = widgetId;
-    widget.className = 'canvas-widget';
-    widget.innerHTML =
-        '<header class="canvas-widget-header" draggable="true">' +
-            '<span class="canvas-widget-handle" title="Drag to reorder">••</span>' +
-            '<span class="canvas-widget-title">Drop channel here</span>' +
-            '<span class="canvas-widget-count">EMPTY</span>' +
-            '<button class="canvas-reset-btn" type="button" title="Reset zoom">↺</button>' +
-            '<button class="canvas-remove-btn" type="button" title="Remove chart">×</button>' +
-        '</header>' +
-        '<div class="canvas-channel-strip" hidden></div>' +
-        '<div class="canvas-plot-host"></div>';
-    canvasArea.appendChild(widget);
-
-    const host = widget.querySelector('.canvas-plot-host');
-    const record = {
-        id: widgetId,
-        element: widget,
-        host,
-        plot: null,
-        parameters: [],
-        requestedParameters: [],
-        loadVersion: 0,
-        rangeReloadTimeout: null,
-        suppressRangeReload: false,
-        loadedRange: null,
-        loadedResolution: null,
-        time: new Float64Array(0),
-        values: [],
-        initialScale: null,
-        resizeObserver: null
-    };
-    createCanvasPlot(record);
-    canvasCharts.set(widgetId, record);
-
-    widget.addEventListener('click', event => {
-        if (!event.target.closest('button')) selectCanvasWidget(widgetId);
-    });
-    widget.addEventListener('dragover', event => {
-        event.preventDefault();
-        widget.classList.add('drag-over');
-    });
-    widget.addEventListener('dragleave', () => widget.classList.remove('drag-over'));
-    widget.addEventListener('drop', event => {
-        event.preventDefault();
-        widget.classList.remove('drag-over');
-        const parameter = event.dataTransfer.getData('text/plain');
-        const draggedWidget = event.dataTransfer.getData('application/x-wavelab-canvas-widget');
-        if (parameter) {
-            selectCanvasWidget(widgetId);
-            addParameterToCanvasWidget(widgetId, parameter);
-        } else if (draggedWidget && draggedWidget !== widgetId) {
-            const source = document.getElementById(draggedWidget);
-            if (source) canvasArea.insertBefore(source, widget);
-        }
-    });
-
-    const header = widget.querySelector('.canvas-widget-header');
-    header.addEventListener('dragstart', event => {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('application/x-wavelab-canvas-widget', widgetId);
-        widget.classList.add('dragging');
-    });
-    header.addEventListener('dragend', () => {
-        widget.classList.remove('dragging');
-        document.querySelectorAll('.canvas-widget.drag-over').forEach(item => item.classList.remove('drag-over'));
-    });
-
-    widget.querySelector('.canvas-reset-btn').addEventListener('click', event => {
-        event.stopPropagation();
-        if (record.initialScale) record.plot.setScale('x', record.initialScale);
-        record.plot.setScale('y', { min: null, max: null });
-    });
-    widget.querySelector('.canvas-remove-btn').addEventListener('click', event => {
-        event.stopPropagation();
-        record.resizeObserver?.disconnect();
-        clearTimeout(record.rangeReloadTimeout);
-        record.plot.destroy();
-        canvasCharts.delete(widgetId);
-        widget.remove();
-        if (selectedCanvasWidgetId === widgetId) selectedCanvasWidgetId = null;
-        if (canvasCharts.size === 0 && isCanvasMode) addCanvasChart();
-        else updateButtonStates();
-    });
-
-    if (typeof ResizeObserver !== 'undefined') {
-        record.resizeObserver = new ResizeObserver(() => resizeCanvasChart(record));
-        record.resizeObserver.observe(host);
-    }
-    selectCanvasWidget(widgetId);
-    resizeCanvasChart(record);
-}
-
-async function addParameterToCanvasWidget(widgetId, parameter) {
-    const record = canvasCharts.get(widgetId);
-    if (!record) return;
-    const requested = record.requestedParameters || record.parameters;
-    if (requested.includes(parameter)) return;
-    record.requestedParameters = requested.concat(parameter);
-    await refreshCanvasWidget(record);
-}
-
-async function removeParameterFromCanvasWidget(widgetId, parameter) {
-    const record = canvasCharts.get(widgetId);
-    if (!record) return;
-    const requested = record.requestedParameters || record.parameters;
-    record.requestedParameters = requested.filter(name => name !== parameter);
-    await refreshCanvasWidget(record);
-}
-
-async function refreshCanvasWidget(record) {
-    const nextParameters = [...record.requestedParameters];
-    const version = ++record.loadVersion;
-    record.element.classList.add('loading');
-    try {
-        if (!nextParameters.length) {
-            record.parameters = [];
-            record.time = new Float64Array(0);
-            record.values = [];
-            record.initialScale = null;
-            record.loadedRange = null;
-            record.loadedResolution = null;
-            createCanvasPlot(record);
-            renderCanvasChannelStrip(record);
-            record.element.querySelector('.canvas-widget-title').textContent = 'Drop channel here';
-            record.element.querySelector('.canvas-widget-count').textContent = 'EMPTY';
-            updateButtonStates();
-            return;
-        }
-        const datasets = await Promise.all(nextParameters.map(name =>
-            fetchChartData(name, -Infinity, Infinity, 2000)));
-        if (version !== record.loadVersion) return;
-        const referenceTime = buildCanvasReferenceTime(datasets);
-        if (!referenceTime.length) throw new Error('No samples returned for the selected channels');
-        const alignedValues = datasets.map(data =>
-            alignSeries(referenceTime, data.time || [], data.value || []));
-
-        record.parameters = nextParameters;
-        record.time = referenceTime;
-        record.values = alignedValues;
-        record.initialScale = {
-            min: Number(datasets[0].firstTimestamp ?? referenceTime[0]),
-            max: Number(datasets[0].lastTimestamp ?? referenceTime[referenceTime.length - 1])
-        };
-        record.initialScale.min = referenceTime[0];
-        record.initialScale.max = referenceTime[referenceTime.length - 1];
-        record.loadedRange = { ...record.initialScale };
-        record.loadedResolution = 2000;
-        createCanvasPlot(record, referenceTime, alignedValues, nextParameters);
-
-        const title = record.element.querySelector('.canvas-widget-title');
-        const count = record.element.querySelector('.canvas-widget-count');
-        title.textContent = record.parameters.join(' · ');
-        title.title = record.parameters.join(' · ');
-        count.textContent = record.parameters.length + ' CH';
-        renderCanvasChannelStrip(record);
-        updateButtonStates();
-    } catch (error) {
-        if (version !== record.loadVersion) return;
-        record.requestedParameters = [...record.parameters];
-        console.error('Canvas chart update failed:', error);
-        showNotification('Canvas chart error: ' + error.message, 'error');
-    } finally {
-        if (version === record.loadVersion) record.element.classList.remove('loading');
-    }
-}
-
-function resizeCanvasChart(record) {
-    if (!record?.plot || !record.host?.isConnected || record.host.clientWidth < 40 || record.host.clientHeight < 40) return;
-    const style = getComputedStyle(record.host);
-    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-    const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-    record.plot.setSize({
-        width: Math.max(40, Math.floor(record.host.clientWidth - horizontalPadding)),
-        height: Math.max(40, Math.floor(record.host.clientHeight - verticalPadding))
-    });
-}
-
-function resizeCanvasCharts() {
-    requestAnimationFrame(() => canvasCharts.forEach(resizeCanvasChart));
 }

@@ -9,7 +9,6 @@ import sqlite3
 import numpy as np
 
 CHUNK_POINTS = 250_000
-MAX_RAW_POINTS = 5_000_000
 
 
 def ensure_schema(conn):
@@ -250,12 +249,9 @@ def iter_chunks(path, name, start=-np.inf, end=np.inf):
         conn.close()
 
 
-def read_arrays(path, name, start=-np.inf, end=np.inf, max_points=MAX_RAW_POINTS):
-    chunks, count = [], 0
+def read_arrays(path, name, start=-np.inf, end=np.inf):
+    chunks = []
     for t, y in iter_chunks(path, name, start, end):
-        count += len(t)
-        if max_points is not None and count > max_points:
-            raise ValueError(f'Raw analysis exceeds {max_points:,} samples; select a smaller time range')
         chunks.append((t, y))
     if not chunks:
         return np.array([], dtype=float), np.array([], dtype=float)
@@ -282,51 +278,3 @@ def statistics(path, name, start=-np.inf, end=np.inf):
                 min=minimum if valid else None, max=maximum if valid else None,
                 min_time=min_time, max_time=max_time)
 
-
-def envelope(path, name, start, end, resolution):
-    """Bounded first/min/max/last envelope, with a NaN marker for gaps.
-
-    Bins are based on time, not index. Aggregation never feeds numerical analysis.
-    At most five samples per bucket, independent of original channel length.
-    """
-    resolution = int(resolution)
-    if not 1 <= resolution <= 10000:
-        raise ValueError('Resolution must be between 1 and 10000')
-    meta = metadata(path, name)
-    if not meta['count']:
-        return [], [], meta
-    start, end = max(start, meta['start']), min(end, meta['end'])
-    if start > end:
-        return [], [], meta
-    bins = {}
-    span = end - start
-    for t, y in iter_chunks(path, name, start, end):
-        ids = np.zeros(len(t), dtype=int) if span == 0 else np.minimum(
-            ((t-start)/span*resolution).astype(int), resolution-1)
-        edges = np.r_[0, np.flatnonzero(np.diff(ids))+1, len(ids)]
-        for lo, hi in zip(edges[:-1], edges[1:]):
-            bt, by = t[lo:hi], y[lo:hi]
-            key = int(ids[lo])
-            state = bins.setdefault(key, {'first': (float(bt[0]), float(by[0])),
-                                          'min': None, 'max': None, 'gap': None,
-                                          'last': None})
-            state['last'] = (float(bt[-1]), float(by[-1]))
-            finite = np.isfinite(by)
-            if not finite.all() and state['gap'] is None:
-                state['gap'] = (float(bt[np.flatnonzero(~finite)[0]]), float('nan'))
-            if finite.any():
-                ft, fy = bt[finite], by[finite]
-                for label, idx, sign in [('min', int(np.argmin(fy)), 1), ('max', int(np.argmax(fy)), -1)]:
-                    point = (float(ft[idx]), float(fy[idx]))
-                    if state[label] is None or sign*point[1] < sign*state[label][1]:
-                        state[label] = point
-    points = {}
-    for state in bins.values():
-        for point in state.values():
-            if point is not None:
-                points[point[0]] = point[1]
-    times = sorted(points)
-    # JSON ``null`` is used for missing samples; the browser converts it to
-    # NaN before constructing typed arrays (never to the misleading value 0).
-    values = [points[t] if np.isfinite(points[t]) else None for t in times]
-    return times, values, meta
