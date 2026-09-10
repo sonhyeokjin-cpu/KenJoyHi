@@ -336,31 +336,20 @@ def set_global_time(start, end, time_basis='epoch'):
                      (float(start),float(end),time_basis))
 
 def get_global_time():
-    """Return the range used by stored channel samples.
-
-    Channel data is stored in the relative-seconds coordinate system. Older
-    imports wrote an absolute source timestamp to the global_time table while
-    still storing relative samples, which made a chart request a valid-looking
-    but empty interval. Prefer channel metadata so legacy sessions are corrected
-    without requiring the user to re-import the source file.
-    """
-    try:
-        start = get_global_start_time()
-        end = get_global_end_time()
-        if (np.isfinite(start) and np.isfinite(end) and start < end):
-            return float(start), float(end)
-    except Exception as exc:
-        logger.warning("Unable to derive global range from channel metadata: %s", exc)
-
+    """global_time 테이블에서 start, end를 반환. 없으면 (0.0, 0.0)"""
     ensure_global_time_table()
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute(
-            'SELECT start_time, end_time FROM global_time WHERE id=1'
-        ).fetchone()
-    if row:
-        return row[0], row[1]
-    return 0.0, 0.0
-
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        c = conn.cursor()
+        c.execute('SELECT start_time, end_time FROM global_time WHERE id=1')
+        row = c.fetchone()
+        print('[DEBUG][get_global_time] row:', row)
+        if row:
+            return row[0], row[1]
+        else:
+            return 0.0, 0.0
+    finally:
+        conn.close()
 def ensure_time_segments_table():
     """Ensure the time_segments table exists in the database."""
     conn = sqlite3.connect(DB_PATH)
