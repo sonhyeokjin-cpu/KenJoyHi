@@ -154,8 +154,8 @@ const fftBtn = document.getElementById('fft-btn');
 const scatterBtn = document.getElementById('scatter-btn');
 const plotArea = document.getElementById('plot-area');
 const parametersList = document.getElementById('parameters-list');
-const minmaxPopup = document.getElementById('minmax-popup');
 const minmaxInfoText = document.getElementById('minmax-info-text');
+const minmaxStatus = document.getElementById('minmax-status');
 const fftPopup = document.getElementById('fft-popup');
 const fftChartElement = document.getElementById('fft-chart');
 const scatterPopup = document.getElementById('scatter-popup');
@@ -218,10 +218,23 @@ let currentFilterType = null;
 function updateInspectorSelection() {
     const summary = document.getElementById('inspector-selection-summary');
     if (!summary) return;
+    if (isCanvasMode) {
+        const canvasRecord = canvasCharts.get(selectedCanvasWidgetId);
+        if (!canvasRecord) {
+            summary.textContent = 'Canvas workspace active · No chart selected';
+            return;
+        }
+        const names = canvasRecord.parameters || [];
+        const channelSummary = names.length
+            ? names.slice(0, 3).join(' · ') + (names.length > 3 ? ` +${names.length - 3}` : '')
+            : 'Empty chart';
+        summary.textContent = `Canvas chart · ${channelSummary}`;
+        return;
+    }
     const selected = charts.filter(chart =>
         document.getElementById(chart.id)?.classList.contains('selected'));
     if (!selected.length) {
-        summary.textContent = isCanvasMode ? 'Canvas workspace active' : 'No chart selected';
+        summary.textContent = 'No chart selected';
         return;
     }
     const channelNames = selected.flatMap(chart => chart.parameters).filter(Boolean);
@@ -575,8 +588,14 @@ async function loadParameters() {
 
             item.addEventListener('click', (e) => {
                 // 파생파라미터 에디터가 열려 있으면 에디터에만 삽입
-                if (isCanvasMode && selectedCanvasWidgetId) {
-                    addParameterToCanvasWidget(selectedCanvasWidgetId, item.dataset.parameter);
+                if (isCanvasMode) {
+                    const targetId = selectedCanvasWidgetId || canvasCharts.keys().next().value;
+                    if (targetId) {
+                        selectCanvasWidget(targetId);
+                        addParameterToCanvasWidget(targetId, item.dataset.parameter);
+                    } else {
+                        showNotification('Add or select a Canvas chart first.', 'error');
+                    }
                 } else if (document.getElementById('derived-panel') && document.getElementById('derived-panel').classList.contains('visible')) {
                     if (window.monacoEditor) {
                         const text = item.dataset.parameter;
@@ -1922,6 +1941,25 @@ function createFFTChart(frequencies, magnitudes, parameter) {
 
 // 버튼 상태 업데이트 함수 수정
 function updateButtonStates() {
+    if (isCanvasMode) {
+        const canvasRecord = canvasCharts.get(selectedCanvasWidgetId);
+        const hasCanvasData = Boolean(canvasRecord?.parameters?.length);
+        scaleBtn.disabled = true;
+        fftBtn.disabled = true;
+        filterBtn.disabled = true;
+        scatterBtn.disabled = true;
+        minmaxBtn.disabled = !hasCanvasData;
+        scaleBtn.classList.add('disabled');
+        fftBtn.classList.add('disabled');
+        fftBtn.classList.remove('primary');
+        filterBtn.classList.add('disabled');
+        filterBtn.classList.remove('primary');
+        scatterBtn.classList.add('disabled');
+        minmaxBtn.classList.toggle('disabled', !hasCanvasData);
+        updateInspectorSelection();
+        return;
+    }
+
     // 복수 차트 선택 시 Min/Max, FFT, Filter 비활성화
     if (selectedCharts.length > 1) {
         minmaxBtn.disabled = true;
@@ -2512,16 +2550,24 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
     }
 });
 
-// Min/Max 분석 함수
-async function performMinMaxAnalysis(chartId) {
-    const chart = charts.find(c => c.id === chartId);
-    if (!chart || chart.parameters.length === 0) return;
+// Min/Max analysis is shared by standard charts and Canvas charts.
+async function performMinMaxAnalysis(chartId, canvasTarget = false) {
+    const chart = canvasTarget
+        ? canvasCharts.get(chartId)
+        : charts.find(c => c.id === chartId);
+    if (!chart || chart.parameters.length === 0 || !chart.plot) return;
 
     try {
-        // 현재 보여지는 시간 영역대 가져오기
-        const currentScale = chart.plot.scales.x;
-        const start = currentScale.min;
-        const end = currentScale.max;
+        openInspector('minmax');
+        if (minmaxStatus) minmaxStatus.textContent = 'Calculating exact statistics…';
+        if (minmaxInfoText) minmaxInfoText.innerHTML = '';
+
+        const currentScale = chart.plot.scales.x || chart.initialScale;
+        const start = Number(currentScale?.min);
+        const end = Number(currentScale?.max);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+            throw new Error('The selected chart does not have a valid visible time range');
+        }
 
         // Exact statistics are computed chunk-wise on the server; no
         // downsampling can hide a narrow spike.
@@ -2540,7 +2586,7 @@ async function performMinMaxAnalysis(chartId) {
         const timeRangeStr = `${(end - start).toFixed(2)} seconds`;
         const resultsHtml = results.map(result => `
             <div class="parameter-section">
-                <div class="parameter-name">${result.parameter}</div>
+                <div class="parameter-name">${escapeHtml(result.parameter)}</div>
                 <div class="value-row">
                     <span class="value-label">Min Value:</span>
                     <span class="value-data">${result.minValue.toFixed(6)}</span>
@@ -2563,26 +2609,24 @@ async function performMinMaxAnalysis(chartId) {
             </div>
         `).join('');
 
-        minmaxInfoText.innerHTML = resultsHtml;
-        
-        // 팝업 표시
-        minmaxPopup.style.display = 'flex';
+        minmaxInfoText.innerHTML = resultsHtml || '<div class="inspector-empty-result">No finite samples were found in the visible range.</div>';
+        if (minmaxStatus) {
+            minmaxStatus.textContent = `${results.length} channel${results.length === 1 ? '' : 's'} · ${timeRangeStr}`;
+        }
     } catch (error) {
         console.error('Error performing Min/Max analysis:', error);
-        alert('Error performing Min/Max analysis: ' + error.message);
+        if (minmaxStatus) minmaxStatus.textContent = `Unable to calculate statistics: ${error.message}`;
+        showNotification('Min/Max error: ' + error.message, 'error');
     }
 }
 
 // Min/Max 버튼 클릭 이벤트
 minmaxBtn.addEventListener('click', () => {
-    if (selectedChart) {
-        performMinMaxAnalysis(selectedChart);
+    if (isCanvasMode && selectedCanvasWidgetId) {
+        performMinMaxAnalysis(selectedCanvasWidgetId, true);
+    } else if (selectedChart) {
+        performMinMaxAnalysis(selectedChart, false);
     }
-});
-
-// Min/Max 팝업 닫기 버튼 이벤트
-minmaxPopup.querySelector('.close-btn').addEventListener('click', () => {
-    minmaxPopup.style.display = 'none';
 });
 
 // 화면 캡처 함수 구현
@@ -5553,43 +5597,106 @@ function toggleCanvasMode() {
 
     if (isCanvasMode) {
         if (canvasCharts.size === 0) addCanvasChart();
+        else if (!selectedCanvasWidgetId) selectCanvasWidget(canvasCharts.keys().next().value);
         showNotification('Canvas workspace enabled. Select a card, then click or drag a channel.');
         resizeCanvasCharts();
     } else {
         selectedCanvasWidgetId = null;
         updateGridLayout();
     }
-    updateInspectorSelection();
+    updateButtonStates();
 }
 
-function canvasPlotOptions(host) {
+const canvasSeriesColors = [
+    '#0284c7', '#ea580c', '#16a34a', '#7c3aed', '#dc2626', '#0891b2',
+    '#ca8a04', '#db2777', '#4f46e5', '#059669', '#9333ea', '#475569'
+];
+
+function canvasSeriesColor(index) {
+    return canvasSeriesColors[index % canvasSeriesColors.length];
+}
+
+function canvasPlotOptions(host, parameters = []) {
+    const hostStyle = getComputedStyle(host);
+    const width = host.clientWidth - parseFloat(hostStyle.paddingLeft) - parseFloat(hostStyle.paddingRight);
+    const height = host.clientHeight - parseFloat(hostStyle.paddingTop) - parseFloat(hostStyle.paddingBottom);
+    const valueSeries = parameters.length
+        ? parameters.map((parameter, index) => ({
+            label: parameter,
+            stroke: canvasSeriesColor(index),
+            width: 1.25,
+            points: { show: false }
+        }))
+        : [{ label: '', show: false }];
     return {
-        width: Math.max(320, host.clientWidth || 480),
-        height: Math.max(180, host.clientHeight || 250),
+        width: Math.max(320, Math.floor(width || 480)),
+        height: Math.max(180, Math.floor(height || 250)),
         cursor: {
             show: true,
             sync: { key: 'shared' },
             drag: { setScale: true, x: true, y: false }
         },
-        scales: { x: { time: false, auto: false }, y: { auto: true } },
+        legend: { show: false },
+        scales: { x: { time: false, auto: true }, y: { auto: true } },
         axes: [
             { scale: 'x', stroke: '#475569', grid: { stroke: '#e2e8f0', width: 1 }, size: 30 },
             { scale: 'y', stroke: '#0284c7', grid: { stroke: '#edf2f7', width: 1 }, size: 42 }
         ],
-        series: [
-            { label: 'Time' },
-            { label: '', stroke: baseSeriesColors[0], width: 1 },
-            { label: '', stroke: baseSeriesColors[1], width: 1 },
-            { label: '', stroke: baseSeriesColors[2], width: 1 }
-        ],
+        series: [{ label: 'Time' }, ...valueSeries],
         padding: [8, 8, 6, 6]
     };
+}
+
+function createCanvasPlot(record, referenceTime = new Float64Array(0), values = [], parameters = []) {
+    record.plot?.destroy();
+    const plotData = parameters.length
+        ? [referenceTime, ...values]
+        : [new Float64Array(0), new Float64Array(0)];
+    record.plot = new uPlot(canvasPlotOptions(record.host, parameters), plotData, record.host);
+    if (record.initialScale && Number.isFinite(record.initialScale.min) && Number.isFinite(record.initialScale.max)) {
+        record.plot.setScale('x', record.initialScale);
+    }
+}
+
+function renderCanvasChannelStrip(record) {
+    const strip = record.element.querySelector('.canvas-channel-strip');
+    if (!strip) return;
+    strip.innerHTML = record.parameters.map((parameter, index) =>
+        `<span class="canvas-channel-chip" style="--channel-color:${canvasSeriesColor(index)}" title="${escapeHtml(parameter)}">` +
+            `<span>${escapeHtml(parameter)}</span>` +
+            `<button type="button" data-canvas-parameter="${escapeHtml(parameter)}" aria-label="Remove ${escapeHtml(parameter)}">×</button>` +
+        '</span>'
+    ).join('');
+    strip.hidden = record.parameters.length === 0;
+    strip.querySelectorAll('[data-canvas-parameter]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            removeParameterFromCanvasWidget(record.id, button.dataset.canvasParameter);
+        });
+    });
+}
+
+function buildCanvasReferenceTime(datasets) {
+    if (datasets.length === 1) return new Float64Array(datasets[0].time || []);
+    const ranges = datasets.map(data => {
+        const time = data.time || [];
+        return { start: Number(time[0]), end: Number(time[time.length - 1]), count: time.length };
+    }).filter(range => Number.isFinite(range.start) && Number.isFinite(range.end) && range.count > 0);
+    if (!ranges.length) return new Float64Array(0);
+    const start = Math.min(...ranges.map(range => range.start));
+    const end = Math.max(...ranges.map(range => range.end));
+    if (start === end) return new Float64Array([start]);
+    const count = Math.min(4000, Math.max(2, ...ranges.map(range => range.count)));
+    const reference = new Float64Array(count);
+    const step = (end - start) / (count - 1);
+    for (let index = 0; index < count; index += 1) reference[index] = start + step * index;
+    return reference;
 }
 
 function selectCanvasWidget(widgetId) {
     selectedCanvasWidgetId = widgetId;
     canvasCharts.forEach(record => record.element.classList.toggle('selected', record.id === widgetId));
-    updateInspectorSelection();
+    updateButtonStates();
 }
 
 function addCanvasChart() {
@@ -5608,25 +5715,25 @@ function addCanvasChart() {
             '<button class="canvas-reset-btn" type="button" title="Reset zoom">↺</button>' +
             '<button class="canvas-remove-btn" type="button" title="Remove chart">×</button>' +
         '</header>' +
+        '<div class="canvas-channel-strip" hidden></div>' +
         '<div class="canvas-plot-host"></div>';
     canvasArea.appendChild(widget);
 
     const host = widget.querySelector('.canvas-plot-host');
-    const plot = new uPlot(canvasPlotOptions(host), [
-        new Float64Array(0), new Float64Array(0),
-        new Float64Array(0), new Float64Array(0)
-    ], host);
     const record = {
         id: widgetId,
         element: widget,
         host,
-        plot,
+        plot: null,
         parameters: [],
+        requestedParameters: [],
+        loadVersion: 0,
         time: new Float64Array(0),
         values: [],
         initialScale: null,
         resizeObserver: null
     };
+    createCanvasPlot(record);
     canvasCharts.set(widgetId, record);
 
     widget.addEventListener('click', event => {
@@ -5675,6 +5782,7 @@ function addCanvasChart() {
         widget.remove();
         if (selectedCanvasWidgetId === widgetId) selectedCanvasWidgetId = null;
         if (canvasCharts.size === 0 && isCanvasMode) addCanvasChart();
+        else updateButtonStates();
     });
 
     if (typeof ResizeObserver !== 'undefined') {
@@ -5687,31 +5795,45 @@ function addCanvasChart() {
 
 async function addParameterToCanvasWidget(widgetId, parameter) {
     const record = canvasCharts.get(widgetId);
-    if (!record || record.parameters.includes(parameter)) return;
-    if (record.parameters.length >= 3) {
-        showNotification('A canvas chart supports up to three channels.', 'error');
-        return;
-    }
+    if (!record) return;
+    const requested = record.requestedParameters || record.parameters;
+    if (requested.includes(parameter)) return;
+    record.requestedParameters = requested.concat(parameter);
+    await refreshCanvasWidget(record);
+}
 
+async function removeParameterFromCanvasWidget(widgetId, parameter) {
+    const record = canvasCharts.get(widgetId);
+    if (!record) return;
+    const requested = record.requestedParameters || record.parameters;
+    record.requestedParameters = requested.filter(name => name !== parameter);
+    await refreshCanvasWidget(record);
+}
+
+async function refreshCanvasWidget(record) {
+    const nextParameters = [...record.requestedParameters];
+    const version = ++record.loadVersion;
     record.element.classList.add('loading');
     try {
-        const nextParameters = record.parameters.concat(parameter);
+        if (!nextParameters.length) {
+            record.parameters = [];
+            record.time = new Float64Array(0);
+            record.values = [];
+            record.initialScale = null;
+            createCanvasPlot(record);
+            renderCanvasChannelStrip(record);
+            record.element.querySelector('.canvas-widget-title').textContent = 'Drop channel here';
+            record.element.querySelector('.canvas-widget-count').textContent = 'EMPTY';
+            updateButtonStates();
+            return;
+        }
         const datasets = await Promise.all(nextParameters.map(name =>
             fetchChartData(name, -Infinity, Infinity, 2000)));
-        const referenceTime = new Float64Array(datasets[0].time || []);
-        if (!referenceTime.length) throw new Error('No samples returned for ' + parameter);
+        if (version !== record.loadVersion) return;
+        const referenceTime = buildCanvasReferenceTime(datasets);
+        if (!referenceTime.length) throw new Error('No samples returned for the selected channels');
         const alignedValues = datasets.map(data =>
             alignSeries(referenceTime, data.time || [], data.value || []));
-        const plotData = [referenceTime];
-        for (let index = 0; index < 3; index += 1) {
-            if (alignedValues[index]) {
-                plotData.push(alignedValues[index]);
-            } else {
-                const emptySeries = new Float64Array(referenceTime.length);
-                emptySeries.fill(NaN);
-                plotData.push(emptySeries);
-            }
-        }
 
         record.parameters = nextParameters;
         record.time = referenceTime;
@@ -5720,23 +5842,24 @@ async function addParameterToCanvasWidget(widgetId, parameter) {
             min: Number(datasets[0].firstTimestamp ?? referenceTime[0]),
             max: Number(datasets[0].lastTimestamp ?? referenceTime[referenceTime.length - 1])
         };
-        record.plot.setData(plotData);
-        record.parameters.forEach((name, index) => {
-            record.plot.setSeries(index + 1, { label: name, show: true });
-        });
-        record.plot.setScale('x', record.initialScale);
-        record.plot.setScale('y', { min: null, max: null });
+        record.initialScale.min = referenceTime[0];
+        record.initialScale.max = referenceTime[referenceTime.length - 1];
+        createCanvasPlot(record, referenceTime, alignedValues, nextParameters);
 
         const title = record.element.querySelector('.canvas-widget-title');
         const count = record.element.querySelector('.canvas-widget-count');
         title.textContent = record.parameters.join(' · ');
         title.title = record.parameters.join(' · ');
         count.textContent = record.parameters.length + ' CH';
+        renderCanvasChannelStrip(record);
+        updateButtonStates();
     } catch (error) {
+        if (version !== record.loadVersion) return;
+        record.requestedParameters = [...record.parameters];
         console.error('Canvas chart update failed:', error);
         showNotification('Canvas chart error: ' + error.message, 'error');
     } finally {
-        record.element.classList.remove('loading');
+        if (version === record.loadVersion) record.element.classList.remove('loading');
     }
 }
 
