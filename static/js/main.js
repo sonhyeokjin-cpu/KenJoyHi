@@ -1772,6 +1772,29 @@ async function updateChartData(chartId, parameters, start, end) {
             }
 
             chart.plot.setData(plotData);
+
+            // setData() preserves prior visibility state. Explicitly restore
+            // every assigned channel so adding channel 2/3 cannot leave the
+            // new series hidden after a previous fixed-scale or limit-line
+            // operation.
+            for (let seriesIndex = 1; seriesIndex <= 3; seriesIndex++) {
+                const assigned = seriesIndex <= parameters.length &&
+                    valueData[seriesIndex - 1] &&
+                    valueData[seriesIndex - 1].length > 0;
+                if (typeof chart.plot.setSeries === 'function') {
+                    chart.plot.setSeries(seriesIndex, { show: assigned });
+                } else if (chart.plot.series?.[seriesIndex]) {
+                    chart.plot.series[seriesIndex].show = assigned;
+                }
+            }
+
+            // Let uPlot recompute the data-driven Y range whenever fixed
+            // limits are not enabled. This is important after a second
+            // parameter changes the shared time axis.
+            if (!isFixedScale) {
+                chart.plot.setScale('y', { min: null, max: null });
+            }
+
             chart.loadedRange = { min: Number(startParam), max: Number(endParam) };
 
             if (isFixedScale && parameters.length >= 1) {
