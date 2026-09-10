@@ -121,10 +121,7 @@ def process_csv_file(filepath, file_type='regular'):
         if global_start_time == float('inf'):
             raise ValueError("No valid time data found.")
 
-        # CSV channel samples are stored relative to global_start_time.
-        # Persist the global range in the same relative-seconds basis.
-        set_global_time(0.0, max_end_time - global_start_time,
-                        time_basis='relative_seconds')
+        set_global_time(global_start_time, max_end_time, time_basis='day_of_year_seconds')
         logger.info(f"Global time determined: {global_start_time} to {max_end_time}")
 
         # --- Pass 2: Process each data column as one streamed channel ---
