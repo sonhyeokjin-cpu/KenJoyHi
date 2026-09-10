@@ -204,6 +204,8 @@ const filterInfoText = document.getElementById('filter-info-text');
 let currentFilterType = null;
 let unitConversionSelectionMode = false;
 let selectedUnitParameter = null;
+let activeInspectorTab = 'scale';
+let globalChartRange = null;
 
 const UNIT_GROUPS = {
     length: { label: '길이', units: ['mm', 'cm', 'm', 'km', 'ft', 'in', 'mile'] },
@@ -243,14 +245,20 @@ function populateUnitSelectors() {
 
 function selectUnitConversionParameter(parameter) {
     selectedUnitParameter = parameter;
+    unitConversionSelectionMode = false;
     const source = document.getElementById('unit-source-parameter');
     const applyButton = document.getElementById('apply-unit-conversion');
     const status = document.getElementById('unit-conversion-status');
+    const chooseButton = document.getElementById('choose-unit-source');
     if (source) {
         source.textContent = parameter;
         source.classList.remove('empty');
     }
     if (applyButton) applyButton.disabled = false;
+    if (chooseButton) {
+        chooseButton.textContent = '변환 대상 다시 선택';
+        chooseButton.classList.remove('active');
+    }
     if (status) {
         status.textContent = '파라미터가 선택되었습니다. 단위를 지정한 후 변환을 실행하세요.';
         status.classList.remove('error');
@@ -262,7 +270,7 @@ function selectUnitConversionParameter(parameter) {
 function updateInspectorSelection() {
     const summary = document.getElementById('inspector-selection-summary');
     if (!summary) return;
-    if (unitConversionSelectionMode) {
+    if (activeInspectorTab === 'unit') {
         summary.textContent = selectedUnitParameter
             ? `단위환산 원본 · ${selectedUnitParameter}`
             : '단위환산 · 왼쪽 목록에서 파라미터 선택';
@@ -282,7 +290,10 @@ function updateInspectorSelection() {
 }
 
 function setInspectorTab(tabName) {
-    unitConversionSelectionMode = tabName === 'unit';
+    activeInspectorTab = tabName;
+    // Opening the unit tab must not hijack normal chart parameter assignment.
+    // Source selection is an explicit, temporary mode below.
+    unitConversionSelectionMode = false;
     document.querySelectorAll('.inspector-tab').forEach(tab => {
         const active = tab.dataset.inspectorTab === tabName;
         tab.classList.toggle('active', active);
@@ -291,7 +302,7 @@ function setInspectorTab(tabName) {
     document.querySelectorAll('.inspector-panel').forEach(panel => {
         panel.classList.toggle('active', panel.dataset.inspectorPanel === tabName);
     });
-    if (unitConversionSelectionMode) populateUnitSelectors();
+    if (tabName === 'unit') populateUnitSelectors();
     updateInspectorSelection();
 }
 
@@ -313,6 +324,7 @@ function closeInspector() {
     analysisInspector.classList.remove('open');
     analysisInspector.setAttribute('aria-hidden', 'true');
     unitConversionSelectionMode = false;
+    activeInspectorTab = null;
     setTimeout(resizeVisibleCharts, 220);
 }
 
@@ -326,8 +338,23 @@ unitConvertBtn?.addEventListener('click', () => {
     populateUnitSelectors();
     const status = document.getElementById('unit-conversion-status');
     if (status && !selectedUnitParameter) {
-        status.textContent = '왼쪽 채널 목록에서 변환할 파라미터를 클릭하세요.';
+        status.textContent = '변환 대상 선택 버튼을 누른 뒤 왼쪽 채널을 클릭하세요.';
     }
+});
+
+document.getElementById('choose-unit-source')?.addEventListener('click', event => {
+    unitConversionSelectionMode = !unitConversionSelectionMode;
+    const button = event.currentTarget;
+    const status = document.getElementById('unit-conversion-status');
+    button.classList.toggle('active', unitConversionSelectionMode);
+    button.textContent = unitConversionSelectionMode ? '선택 중… (취소)' : '변환 대상 선택';
+    if (status) {
+        status.classList.remove('error');
+        status.textContent = unitConversionSelectionMode
+            ? '왼쪽 채널 목록에서 변환할 파라미터를 클릭하세요.'
+            : '차트 파라미터 할당 모드로 돌아왔습니다.';
+    }
+    updateInspectorSelection();
 });
 
 document.getElementById('unit-quantity-type')?.addEventListener('change', () => {
@@ -755,30 +782,6 @@ async function loadParameters() {
 
 // Show Description 토글 시 파라미터 리스트 갱신 (setupToggleEventListeners에서 처리됨)
 
-// plot-area 스타일 설정 (Plot 탭에서만 적용)
-(function() {
-    const style = document.createElement('style');
-    style.innerHTML = `
-        #plot-area.show-for-plot {
-            display: grid !important;
-            grid-template-columns: repeat(4, 1fr);
-            grid-template-rows: repeat(2, 1fr);
-            width: 100vw;
-            height: 100vh;
-            gap: 8px;
-            overflow: hidden;
-        }
-        .chart-container {
-            width: 100%;
-            height: 100%;
-            min-width: 0;
-            min-height: 0;
-            box-sizing: border-box;
-        }
-    `;
-    document.head.appendChild(style);
-})();
-
 // 최대 차트 개수
 const MAX_CHARTS = 25;
 const INITIAL_CHARTS = 4;
@@ -786,7 +789,7 @@ const INITIAL_CHARTS = 4;
 function updateGridLayout() {
     const plotArea = document.getElementById('plot-area');
     const chartCount = charts.length;
-    if (!plotArea) return;
+    if (!plotArea || chartCount === 0 || getComputedStyle(plotArea).display === 'none') return;
 
     let cols, rows;
     if (chartCount <= 4) { cols = 2; rows = 2; }
@@ -795,16 +798,20 @@ function updateGridLayout() {
     else if (chartCount <= 20) { cols = 4; rows = 5; }
     else { cols = 5; rows = 5; }
 
-    const gap = 2.5;
+    const gap = parseFloat(getComputedStyle(plotArea).gap) || 5;
     const plotAreaStyle = getComputedStyle(plotArea);
     const paddingLeft = parseFloat(plotAreaStyle.paddingLeft);
     const paddingRight = parseFloat(plotAreaStyle.paddingRight);
+    const paddingTop = parseFloat(plotAreaStyle.paddingTop);
+    const paddingBottom = parseFloat(plotAreaStyle.paddingBottom);
     const totalPadding = paddingLeft + paddingRight;
 
-    const plotAreaWidth = plotArea.clientWidth - totalPadding;
-    const plotAreaHeight = plotArea.clientHeight;
-    const chartWidth = (plotAreaWidth - gap * (cols - 1)) / cols;
-    const chartHeight = (plotAreaHeight - gap * (rows - 1)) / rows;
+    // clientWidth/clientHeight already exclude scrollbars. Subtract only the
+    // CSS padding so the grid never grows underneath a scrollbar.
+    const plotAreaWidth = Math.max(0, plotArea.clientWidth - totalPadding);
+    const plotAreaHeight = Math.max(0, plotArea.clientHeight - paddingTop - paddingBottom);
+    const chartWidth = Math.max(0, Math.floor((plotAreaWidth - gap * (cols - 1)) / cols));
+    const chartHeight = Math.max(0, Math.floor((plotAreaHeight - gap * (rows - 1)) / rows));
 
     plotArea.style.gridTemplateColumns = Array(cols).fill(`${chartWidth}px`).join(' ');
     plotArea.style.gridTemplateRows = Array(rows).fill(`${chartHeight}px`).join(' ');
@@ -825,11 +832,21 @@ function updateGridLayout() {
             const paddingBottom = parseFloat(style.paddingBottom);
             const plotWidth = chartWidth - paddingLeft - paddingRight;
             const plotHeight = chartHeight - paddingTop - paddingBottom;
+            const plotElement = container.querySelector('.chart-plot');
+            if (plotElement) {
+                plotElement.style.width = `${Math.max(0, plotWidth)}px`;
+                plotElement.style.height = `${Math.max(0, plotHeight)}px`;
+            }
 
             if (chart.plot) {
+                // uPlot's legend is rendered below the plotting wrap. Keep
+                // that row inside the tile instead of sizing only the canvas.
+                const legendHeight = plotElement?.querySelector('.u-legend')
+                    ? Math.ceil(plotElement.querySelector('.u-legend').getBoundingClientRect().height)
+                    : 0;
                 chart.plot.setSize({
-                    width: plotWidth,
-                    height: plotHeight
+                    width: Math.max(0, plotWidth),
+                    height: Math.max(0, plotHeight - legendHeight)
                 });
             }
         }
@@ -847,6 +864,7 @@ function resetPlotArea() {
         console.log(`Destroyed ${charts.length} old charts.`);
     }
     charts = [];
+    globalChartRange = null;
     
     // Clear the DOM
     if (plotArea) {
@@ -1228,57 +1246,22 @@ window.addEventListener('keydown', (e) => {
             newMin = currentMin + moveDistance;
             newMax = currentMax + moveDistance;
         }
-        
-        // 모든 차트에 동일한 스케일 적용
-        chartsWithData.forEach(chart => {
-            // 각 차트의 데이터 범위를 벗어나지 않도록 제한 (대용량 데이터 처리)
-            let dataMin = Infinity;
-            let dataMax = -Infinity;
-            
-            // 배열이 너무 큰 경우 샘플링하여 최소/최대값 계산
-            const timeArray = chart.data.time;
-            const arrayLength = timeArray.length;
-            
-            if (arrayLength > 10000) {
-                // 대용량 데이터의 경우 샘플링
-                const step = Math.max(1, Math.floor(arrayLength / 10000));
-                for (let i = 0; i < arrayLength; i += step) {
-                    const val = timeArray[i];
-                    if (val < dataMin) dataMin = val;
-                    if (val > dataMax) dataMax = val;
-                }
-            } else {
-                // 소용량 데이터의 경우 전체 검사
-                for (let i = 0; i < arrayLength; i++) {
-                    const val = timeArray[i];
-                    if (val < dataMin) dataMin = val;
-                    if (val > dataMax) dataMax = val;
-                }
+
+        // 모든 차트가 같은 시간축을 유지하도록 첫 차트의 전체 범위에서만
+        // 이동을 제한한 뒤 공통 범위를 한 번에 적용한다.
+        const globalRange = validTimeRange(firstChart.initialScale?.min, firstChart.initialScale?.max);
+        if (globalRange) {
+            if (newMin < globalRange.min) {
+                newMin = globalRange.min;
+                newMax = Math.min(globalRange.max, newMin + currentRange);
             }
-            
-            let chartNewMin = newMin;
-            let chartNewMax = newMax;
-            
-            if (chartNewMin < dataMin) {
-                chartNewMin = dataMin;
-                chartNewMax = chartNewMin + currentRange;
+            if (newMax > globalRange.max) {
+                newMax = globalRange.max;
+                newMin = Math.max(globalRange.min, newMax - currentRange);
             }
-            if (chartNewMax > dataMax) {
-                chartNewMax = dataMax;
-                chartNewMin = chartNewMax - currentRange;
-            }
-            
-            // Fixed Scale이 활성화된 경우 Y축 스케일을 유지
-            if (isFixedScale) {
-                // 현재 Y축 스케일을 유지하면서 X축만 업데이트
-                const currentYScale = chart.plot.scales.y;
-                chart.plot.setScale('x', { min: chartNewMin, max: chartNewMax });
-                // Y축 스케일을 명시적으로 다시 설정하여 자동 조정 방지
-                chart.plot.setScale('y', { min: currentYScale.min, max: currentYScale.max });
-            } else {
-                // Fixed Scale이 비활성화된 경우 일반적인 업데이트
-                chart.plot.setScale('x', { min: chartNewMin, max: chartNewMax });
-            }
+        }
+        synchronizeChartRange({ min: newMin, max: newMax }).catch(error => {
+            console.error('Unable to synchronize chart ranges:', error);
         });
     }
 });
@@ -1316,14 +1299,12 @@ function createChart() {
         }
     }, true);
 
-    // Double-click to reset zoom
+    // Double-click resets every populated chart to the same global range.
     chartContainer.addEventListener('dblclick', () => {
-        const chart = charts.find(c => c.id === chartId);
-        if (chart && chart.initialScale) {
-            chart.plot.setScale('x', chart.initialScale);
-        // Re-fetch every original sample for the full range.
-        updateChartData(chartId, chart.parameters, chart.initialScale.min, chart.initialScale.max);
-        }
+        resetAllChartsToGlobalRange().catch(error => {
+            console.error('Unable to reset all chart ranges:', error);
+            showNotification('전체 차트 시간축 초기화 실패: ' + error.message, 'error');
+        });
     });
     
     const chartTitle = document.createElement('div');
@@ -1346,7 +1327,7 @@ function createChart() {
     const chartElement = document.createElement('div');
     chartElement.className = 'chart-plot';
     chartElement.style.width = '100%';
-    chartElement.style.height = '250px';
+    chartElement.style.height = '100%';
     
     chartContainer.appendChild(chartHeader);
     chartContainer.appendChild(chartElement);
@@ -1633,6 +1614,74 @@ function sameRange(a, b) {
     return Math.abs(a.min - b.min) <= tolerance && Math.abs(a.max - b.max) <= tolerance;
 }
 
+function validTimeRange(min, max) {
+    return Number.isFinite(Number(min)) && Number.isFinite(Number(max)) && Number(min) < Number(max)
+        ? { min: Number(min), max: Number(max) }
+        : null;
+}
+
+async function getGlobalChartRange() {
+    if (globalChartRange) return { ...globalChartRange };
+    try {
+        const response = await fetch('/api/global_time');
+        const data = await response.json();
+        if (response.ok) {
+            const range = validTimeRange(data.start, data.end);
+            if (range) {
+                globalChartRange = range;
+                return { ...range };
+            }
+        }
+    } catch (error) {
+        console.warn('Global time range unavailable; using loaded chart ranges.', error);
+    }
+
+    const ranges = charts
+        .map(chart => chart.initialScale || chart.loadedRange)
+        .map(range => validTimeRange(range?.min, range?.max))
+        .filter(Boolean);
+    if (!ranges.length) return null;
+    globalChartRange = {
+        min: Math.min(...ranges.map(range => range.min)),
+        max: Math.max(...ranges.map(range => range.max))
+    };
+    return { ...globalChartRange };
+}
+
+function setChartXRange(chart, range) {
+    if (!chart?.plot) return;
+    chart.suppressRangeReload = true;
+    try {
+        chart.plot.setScale('x', range);
+    } finally {
+        chart.suppressRangeReload = false;
+    }
+    chart.lastZoom = { ...range };
+}
+
+async function synchronizeChartRange(range) {
+    const normalized = validTimeRange(range?.min, range?.max);
+    if (!normalized) return;
+    const targets = charts.filter(chart => chart.parameters?.length && chart.plot);
+    targets.forEach(chart => setChartXRange(chart, normalized));
+    await Promise.all(targets.map(chart => {
+        if (sameRange(chart.loadedRange, normalized)) return Promise.resolve();
+        return updateChartData(chart.id, chart.parameters, normalized.min, normalized.max);
+    }));
+}
+
+async function resetAllChartsToGlobalRange() {
+    const range = await getGlobalChartRange();
+    if (!range) {
+        showNotification('전체 시간 범위를 확인할 수 없습니다.', 'error');
+        return;
+    }
+    charts.forEach(chart => {
+        if (chart.parameters?.length) chart.initialScale = { ...range };
+    });
+    await synchronizeChartRange(range);
+}
+
 function scheduleChartRangeReload(chartId, plot) {
     const chart = charts.find(item => item.id === chartId);
     const min = Number(plot?.scales?.x?.min);
@@ -1643,9 +1692,7 @@ function scheduleChartRangeReload(chartId, plot) {
     clearTimeout(chart.updateTimeout);
     chart.updateTimeout = setTimeout(async () => {
         const requestedRange = { min, max };
-        if (sameRange(chart.loadedRange, requestedRange)) return;
-        chart.lastZoom = requestedRange;
-        await updateChartData(chartId, chart.parameters, min, max);
+        await synchronizeChartRange(requestedRange);
     }, RANGE_RELOAD_DEBOUNCE_MS);
 }
 
@@ -1731,10 +1778,11 @@ async function updateChart(chartId, parameter) {
         const data = await fetchChartData(parameter, -Infinity, Infinity);
 
         if (data.time && data.time.length > 0) {
-            const initialScale = {
+            const dataRange = {
                 min: data.firstTimestamp,
                 max: data.lastTimestamp
             };
+            const initialScale = (await getGlobalChartRange()) || dataRange;
 
             chart.initialScale = initialScale;
             chart.lastZoom = initialScale;
@@ -1742,7 +1790,7 @@ async function updateChart(chartId, parameter) {
             // Update the chart with the full data
             await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max);
 
-            chart.plot.setScale('x', initialScale);
+            setChartXRange(chart, initialScale);
 
             console.log('Initial scale set with raw data:', {
                 chartId,
@@ -2841,6 +2889,7 @@ async function updateGlobalTimeInfo() {
         const resp = await fetch('/api/global_time');
         if (!resp.ok) throw new Error('Failed to fetch global time');
         const data = await resp.json();
+        globalChartRange = validTimeRange(data.start, data.end);
         console.log('Fetched global time:', data); // 진단용 로그
         const startStr = formatGlobalTime(data.start);
         const endStr = formatGlobalTime(data.end);
