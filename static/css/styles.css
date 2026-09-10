@@ -2315,7 +2315,7 @@ th {
 
 .inspector-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 8px 10px 0;
     border-bottom: 1px solid var(--shell-border);
 }
@@ -2423,6 +2423,66 @@ th {
     font-size: 11px;
     line-height: 1.5;
     text-align: center;
+}
+
+.unit-source-parameter {
+    margin: 12px 0 16px;
+    padding: 11px 12px;
+    border: 1px solid #2f4964;
+    border-left: 3px solid var(--accent-color);
+    border-radius: var(--radius-sm);
+    background: #0d1828;
+    color: #dff4ff;
+    font: 600 11px/1.4 Consolas, 'Courier New', monospace;
+    overflow-wrap: anywhere;
+}
+
+.unit-source-parameter.empty {
+    border-left-color: #64748b;
+    color: #7f93a8;
+}
+
+.unit-direction-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr);
+    align-items: end;
+    gap: 6px;
+}
+
+.unit-direction-grid > span {
+    padding-bottom: 9px;
+    color: var(--accent-color);
+    text-align: center;
+}
+
+.unit-conversion-status {
+    min-height: 18px;
+    margin-top: 10px;
+    color: #7dd3fc;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.unit-conversion-status.error {
+    color: #fca5a5;
+}
+
+/* Modal and side-panel layers must stay above the toolbar (z-index: 4000). */
+.popup {
+    z-index: 6000 !important;
+}
+
+#config-editor-popup,
+#save-config-modal {
+    z-index: 6200 !important;
+}
+
+.derived-panel {
+    z-index: 6100 !important;
+}
+
+.help-modal {
+    z-index: 7000 !important;
 }
 
 .inspector-section-heading {
@@ -2593,175 +2653,9 @@ th {
     z-index: 5000;
 }
 
-.plot-area,
-#canvas-area {
+.plot-area {
     position: relative;
     z-index: 1;
-}
-
-/* Dependency-free Canvas workspace --------------------------------------- */
-#canvas-area {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 8px;
-    background: #dce4ed;
-    overflow: auto;
-}
-
-.canvas-widget {
-    width: min(560px, 100%);
-    height: 330px;
-    min-width: 360px;
-    min-height: 230px;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid #c7d3df;
-    border-radius: var(--radius-md);
-    background: #ffffff;
-    box-shadow: var(--shadow-card);
-    resize: both;
-    overflow: hidden;
-}
-
-.canvas-widget.selected {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 1px var(--primary-color), 0 4px 14px rgba(2, 132, 199, 0.13);
-}
-
-.canvas-widget.drag-over {
-    border-color: var(--accent-color);
-    box-shadow: inset 0 0 0 2px rgba(56, 189, 248, 0.38);
-}
-
-.canvas-widget.dragging {
-    opacity: 0.55;
-}
-
-.canvas-widget.loading .canvas-widget-count {
-    color: var(--warning-color);
-}
-
-.canvas-widget-header {
-    height: 32px;
-    flex: 0 0 32px;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 7px 0 9px;
-    border-bottom: 1px solid #e2e8f0;
-    background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
-    cursor: grab;
-    user-select: none;
-}
-
-.canvas-widget-handle {
-    color: #94a3b8;
-    font: 700 11px/1 Consolas, 'Courier New', monospace;
-    letter-spacing: -0.12em;
-}
-
-.canvas-widget-title {
-    min-width: 0;
-    flex: 1;
-    color: #334155;
-    font: 600 10px/1.2 Consolas, 'Courier New', monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.canvas-widget-count {
-    padding: 3px 6px;
-    border: 1px solid #d6e0ea;
-    border-radius: 999px;
-    background: #f1f5f9;
-    color: #64748b;
-    font: 700 8px/1 Consolas, 'Courier New', monospace;
-}
-
-.canvas-widget-header button {
-    width: 24px;
-    height: 24px;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: #64748b;
-    cursor: pointer;
-    font-size: 15px;
-}
-
-.canvas-widget-header button:hover {
-    background: #e8f1f7;
-    color: #075985;
-}
-
-.canvas-channel-strip {
-    max-height: 62px;
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 5px 7px;
-    border-bottom: 1px solid #e2e8f0;
-    background: #f8fafc;
-    overflow: auto;
-}
-
-.canvas-channel-strip[hidden] {
-    display: none;
-}
-
-.canvas-channel-chip {
-    min-width: 0;
-    max-width: 180px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 3px 3px 7px;
-    border: 1px solid #d7e0ea;
-    border-left: 3px solid var(--channel-color);
-    border-radius: 999px;
-    background: #ffffff;
-    color: #475569;
-    font: 600 9px/1 Consolas, 'Courier New', monospace;
-}
-
-.canvas-channel-chip > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.canvas-channel-chip button {
-    width: 16px;
-    height: 16px;
-    flex: 0 0 16px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: #94a3b8;
-    cursor: pointer;
-    line-height: 14px;
-}
-
-.canvas-channel-chip button:hover {
-    background: #e2e8f0;
-    color: #334155;
-}
-
-.canvas-plot-host {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    padding: 6px;
-    overflow: hidden;
 }
 
 @media (max-width: 1200px) {
@@ -2771,7 +2665,4 @@ th {
         flex-basis: 320px;
     }
 
-    .canvas-widget {
-        width: min(480px, 100%);
-    }
 }
