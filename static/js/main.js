@@ -863,11 +863,20 @@ function updateGridLayout() {
         });
     };
 
+    const firstViewport = { width: plotArea.clientWidth, height: plotArea.clientHeight };
     resizePlots();
     // Grid track sizes settle on the next frame after changing the inline
-    // dimensions. Resize once more so uPlot receives the final viewport.
+    // dimensions. Re-run the full grid calculation if the viewport was
+    // initially measured while the tab was still being laid out.
     if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(resizePlots);
+        requestAnimationFrame(() => {
+            if (plotArea.clientWidth !== firstViewport.width ||
+                    plotArea.clientHeight !== firstViewport.height) {
+                updateGridLayout();
+            } else {
+                resizePlots();
+            }
+        });
     }
 }
 function resetPlotArea() {
