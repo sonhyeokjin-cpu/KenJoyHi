@@ -1362,25 +1362,8 @@ function createChart() {
         ],
         padding: [10, 10, 10, 10],
         hooks: {
-            setSelect: [(u) => {
-                /*
-                const chart = charts.find(c => c.id === chartId);
-                if (!chart || u.cursor.left < 0) return; // Ignore if chart not found or selection is being cleared
-
-                clearTimeout(chart.updateTimeout);
-
-                const min = u.scales.x.min;
-                const max = u.scales.x.max;
-
-                // Avoid re-fetching on simple clicks or tiny drags
-                if (max - min < 1e-6) return;
-
-                chart.updateTimeout = setTimeout(() => {
-                    console.log(`Zoom event on ${chartId}: ${min} to ${max}`);
-                    const resolution = Math.floor(chart.plot.width * 2);
-                    updateChartData(chartId, chart.parameters, min, max, resolution);
-                }, 500); // 500ms debounce to prevent rapid-fire requests
-                */
+            setScale: [(u, scaleKey) => {
+                if (scaleKey === 'x') scheduleChartRangeReload(chartId, u);
             }]
         }
     };
@@ -1407,6 +1390,9 @@ function createChart() {
         lastUpdateTime: 0,
         isUpdating: false,
         isRestoringZoom: false,
+        dataRequestVersion: 0,
+        loadedRange: null,
+        loadedResolution: null,
         initialScale: null,
         data: {
             time: new Float64Array(0),
@@ -1552,19 +1538,76 @@ function calculateScaleDifference(data1, data2) {
     return ratio;
 }
 
+const RAW_RENDER_SAMPLE_LIMIT = 200000;
+const MAX_SHARED_TIME_POINTS = 250000;
+const RANGE_RELOAD_DEBOUNCE_MS = 250;
+
+async function fetchRangeSampleCount(parameter, start, end) {
+    const response = await fetch(`/api/data_count?parameter=${encodeURIComponent(parameter)}&start=${start}&end=${end}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Failed to count visible samples');
+    return Math.max(0, Number(body.count) || 0);
+}
+
+async function chooseVisibleRangeResolution(parameters, start, end, pixelWidth) {
+    try {
+        const counts = await Promise.all(parameters.map(parameter =>
+            fetchRangeSampleCount(parameter, start, end)));
+        const totalSamples = counts.reduce((sum, count) => sum + count, 0);
+        if (totalSamples <= RAW_RENDER_SAMPLE_LIMIT) {
+            return { resolution: 0, totalSamples, representation: 'raw' };
+        }
+        return {
+            resolution: Math.min(10000, Math.max(500, Math.ceil(pixelWidth * 2))),
+            totalSamples,
+            representation: 'envelope'
+        };
+    } catch (error) {
+        console.warn('Sample count unavailable; using bounded envelope:', error);
+        return {
+            resolution: Math.min(10000, Math.max(500, Math.ceil(pixelWidth * 2))),
+            totalSamples: null,
+            representation: 'envelope'
+        };
+    }
+}
+
+function sameRange(a, b) {
+    if (!a || !b) return false;
+    const span = Math.max(1, Math.abs(b.max - b.min));
+    const tolerance = span * 1e-9;
+    return Math.abs(a.min - b.min) <= tolerance && Math.abs(a.max - b.max) <= tolerance;
+}
+
+function scheduleChartRangeReload(chartId, plot) {
+    const chart = charts.find(item => item.id === chartId);
+    const min = Number(plot?.scales?.x?.min);
+    const max = Number(plot?.scales?.x?.max);
+    if (!chart?.parameters?.length || chart.suppressRangeReload ||
+        !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
+
+    clearTimeout(chart.updateTimeout);
+    chart.updateTimeout = setTimeout(async () => {
+        const requestedRange = { min, max };
+        const choice = await chooseVisibleRangeResolution(
+            chart.parameters, min, max, getChartPixelWidth(chart.plot));
+        if (sameRange(chart.loadedRange, requestedRange) && chart.loadedResolution === choice.resolution) return;
+        chart.lastZoom = requestedRange;
+        await updateChartData(chartId, chart.parameters, min, max, choice.resolution);
+    }, RANGE_RELOAD_DEBOUNCE_MS);
+}
+
 // 차트 데이터 업데이트 함수 수정
 async function updateChartData(chartId, parameters, start, end, resolution) {
     const chart = charts.find(c => c.id === chartId);
     if (!chart || !parameters || parameters.length === 0) return;
+    const requestVersion = (chart.dataRequestVersion || 0) + 1;
+    chart.dataRequestVersion = requestVersion;
 
     try {
         const startParam = (start === undefined || start === null) ? -Infinity : start;
         const endParam = (end === undefined || end === null) ? Infinity : end;
 
-        if (chart.isUpdating) {
-            console.log('Update already in progress, skipping...');
-            return;
-        }
         chart.isUpdating = true;
 
         const chartContainer = document.getElementById(chartId);
@@ -1576,10 +1619,11 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
         try {
             const dataPromises = parameters.map(param => fetchChartData(param, startParam, endParam, resolution));
             const allData = await Promise.all(dataPromises);
+            if (requestVersion !== chart.dataRequestVersion) return;
 
-            const timeData = allData.length > 0 ? new Float64Array(allData[0].time) : new Float64Array(0);
-            // Each channel can have a different native sample clock.  Align
-            // every series to the first channel before handing it to uPlot.
+            const timeData = buildCanvasReferenceTime(allData);
+            // Preserve every returned channel timestamp on a shared axis,
+            // then align the individual value arrays to that union.
             const valueData = allData.map(data => alignSeries(timeData, data.time, data.value));
 
             chart.data = { time: timeData, values: valueData };
@@ -1591,6 +1635,8 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
             }
 
             chart.plot.setData(plotData);
+            chart.loadedRange = { min: Number(startParam), max: Number(endParam) };
+            chart.loadedResolution = resolution === undefined || resolution === null ? 2000 : resolution;
 
             if (isFixedScale && parameters.length >= 1) {
                 const config = (window.configData || []).find(c => c.parameter_name === parameters[0]);
@@ -1600,10 +1646,13 @@ async function updateChartData(chartId, parameters, start, end, resolution) {
             }
 
         } finally {
-            chart.isUpdating = false;
-            updateChartTitle(chart);
+            if (requestVersion === chart.dataRequestVersion) {
+                chart.isUpdating = false;
+                updateChartTitle(chart);
+            }
         }
     } catch (error) {
+        if (requestVersion !== chart.dataRequestVersion) return;
         console.error('Error updating chart data:', error);
         chart.isUpdating = false;
         const chartContainer = document.getElementById(chartId);
@@ -1673,13 +1722,13 @@ function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignment
         const x = referenceTime[i];
         while (j + 1 < t.length && t[j + 1] <= x) j++;
         if (j >= t.length || x < t[0] || x > t[t.length - 1]) continue;
-        const v0 = Number(v[j]);
+        const v0 = (v[j] === null || v[j] === undefined) ? NaN : Number(v[j]);
         if (!Number.isFinite(v0)) continue;
         if (policy === 'hold-last' || j + 1 >= t.length || t[j + 1] === t[j]) {
             out[i] = v0;
             continue;
         }
-        const v1 = Number(v[j + 1]);
+        const v1 = (v[j + 1] === null || v[j + 1] === undefined) ? NaN : Number(v[j + 1]);
         if (!Number.isFinite(v1)) { out[i] = v0; continue; }
         if (policy === 'nearest') {
             out[i] = (x - t[j] <= t[j + 1] - x) ? v0 : v1;
@@ -5616,7 +5665,7 @@ function canvasSeriesColor(index) {
     return canvasSeriesColors[index % canvasSeriesColors.length];
 }
 
-function canvasPlotOptions(host, parameters = []) {
+function canvasPlotOptions(host, parameters = [], record = null) {
     const hostStyle = getComputedStyle(host);
     const width = host.clientWidth - parseFloat(hostStyle.paddingLeft) - parseFloat(hostStyle.paddingRight);
     const height = host.clientHeight - parseFloat(hostStyle.paddingTop) - parseFloat(hostStyle.paddingBottom);
@@ -5643,18 +5692,73 @@ function canvasPlotOptions(host, parameters = []) {
             { scale: 'y', stroke: '#0284c7', grid: { stroke: '#edf2f7', width: 1 }, size: 42 }
         ],
         series: [{ label: 'Time' }, ...valueSeries],
-        padding: [8, 8, 6, 6]
+        padding: [8, 8, 6, 6],
+        hooks: {
+            setScale: [(plot, scaleKey) => {
+                if (scaleKey === 'x' && record) scheduleCanvasRangeReload(record, plot);
+            }]
+        }
     };
 }
 
-function createCanvasPlot(record, referenceTime = new Float64Array(0), values = [], parameters = []) {
-    record.plot?.destroy();
-    const plotData = parameters.length
-        ? [referenceTime, ...values]
-        : [new Float64Array(0), new Float64Array(0)];
-    record.plot = new uPlot(canvasPlotOptions(record.host, parameters), plotData, record.host);
-    if (record.initialScale && Number.isFinite(record.initialScale.min) && Number.isFinite(record.initialScale.max)) {
-        record.plot.setScale('x', record.initialScale);
+function createCanvasPlot(record, referenceTime = new Float64Array(0), values = [], parameters = [], xScale = record.initialScale) {
+    record.suppressRangeReload = true;
+    try {
+        record.plot?.destroy();
+        const plotData = parameters.length
+            ? [referenceTime, ...values]
+            : [new Float64Array(0), new Float64Array(0)];
+        record.plot = new uPlot(canvasPlotOptions(record.host, parameters, record), plotData, record.host);
+        if (xScale && Number.isFinite(xScale.min) && Number.isFinite(xScale.max)) {
+            record.plot.setScale('x', xScale);
+        }
+    } finally {
+        record.suppressRangeReload = false;
+    }
+}
+
+function scheduleCanvasRangeReload(record, plot) {
+    const min = Number(plot?.scales?.x?.min);
+    const max = Number(plot?.scales?.x?.max);
+    if (!record?.parameters?.length || record.suppressRangeReload ||
+        !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
+
+    clearTimeout(record.rangeReloadTimeout);
+    record.rangeReloadTimeout = setTimeout(async () => {
+        const requestedRange = { min, max };
+        const choice = await chooseVisibleRangeResolution(
+            record.parameters, min, max, Math.max(320, record.plot?.width || record.host.clientWidth));
+        if (sameRange(record.loadedRange, requestedRange) && record.loadedResolution === choice.resolution) return;
+        await reloadCanvasVisibleRange(record, min, max, choice.resolution);
+    }, RANGE_RELOAD_DEBOUNCE_MS);
+}
+
+async function reloadCanvasVisibleRange(record, start, end, resolution) {
+    const parameters = [...record.parameters];
+    const version = ++record.loadVersion;
+    record.element.classList.add('loading');
+    try {
+        const datasets = await Promise.all(parameters.map(name =>
+            fetchChartData(name, start, end, resolution)));
+        if (version !== record.loadVersion) return;
+        const referenceTime = buildCanvasReferenceTime(datasets);
+        if (!referenceTime.length) {
+            record.time = new Float64Array(0);
+            record.values = parameters.map(() => new Float64Array(0));
+        } else {
+            record.time = referenceTime;
+            record.values = datasets.map(data =>
+                alignSeries(referenceTime, data.time || [], data.value || []));
+        }
+        record.loadedRange = { min: start, max: end };
+        record.loadedResolution = resolution;
+        createCanvasPlot(record, record.time, record.values, parameters, record.loadedRange);
+    } catch (error) {
+        if (version !== record.loadVersion) return;
+        console.error('Canvas range update failed:', error);
+        showNotification('Canvas zoom update error: ' + error.message, 'error');
+    } finally {
+        if (version === record.loadVersion) record.element.classList.remove('loading');
     }
 }
 
@@ -5677,19 +5781,30 @@ function renderCanvasChannelStrip(record) {
 }
 
 function buildCanvasReferenceTime(datasets) {
-    if (datasets.length === 1) return new Float64Array(datasets[0].time || []);
-    const ranges = datasets.map(data => {
-        const time = data.time || [];
-        return { start: Number(time[0]), end: Number(time[time.length - 1]), count: time.length };
-    }).filter(range => Number.isFinite(range.start) && Number.isFinite(range.end) && range.count > 0);
-    if (!ranges.length) return new Float64Array(0);
-    const start = Math.min(...ranges.map(range => range.start));
-    const end = Math.max(...ranges.map(range => range.end));
-    if (start === end) return new Float64Array([start]);
-    const count = Math.min(4000, Math.max(2, ...ranges.map(range => range.count)));
-    const reference = new Float64Array(count);
-    const step = (end - start) / (count - 1);
-    for (let index = 0; index < count; index += 1) reference[index] = start + step * index;
+    const merged = [];
+    datasets.forEach(data => {
+        for (const value of (data.time || [])) {
+            const timestamp = Number(value);
+            if (Number.isFinite(timestamp)) merged.push(timestamp);
+        }
+    });
+    if (!merged.length) return new Float64Array(0);
+    merged.sort((a, b) => a - b);
+    const unique = [];
+    let previous;
+    merged.forEach(timestamp => {
+        if (!unique.length || timestamp !== previous) unique.push(timestamp);
+        previous = timestamp;
+    });
+    if (unique.length <= MAX_SHARED_TIME_POINTS) return new Float64Array(unique);
+
+    // Keep a bounded, monotonically increasing axis for extremely dense
+    // overview requests. Narrow ranges switch to raw mode before this path.
+    const reference = new Float64Array(MAX_SHARED_TIME_POINTS);
+    const last = unique.length - 1;
+    for (let index = 0; index < MAX_SHARED_TIME_POINTS; index += 1) {
+        reference[index] = unique[Math.round(index * last / (MAX_SHARED_TIME_POINTS - 1))];
+    }
     return reference;
 }
 
@@ -5728,6 +5843,10 @@ function addCanvasChart() {
         parameters: [],
         requestedParameters: [],
         loadVersion: 0,
+        rangeReloadTimeout: null,
+        suppressRangeReload: false,
+        loadedRange: null,
+        loadedResolution: null,
         time: new Float64Array(0),
         values: [],
         initialScale: null,
@@ -5777,6 +5896,7 @@ function addCanvasChart() {
     widget.querySelector('.canvas-remove-btn').addEventListener('click', event => {
         event.stopPropagation();
         record.resizeObserver?.disconnect();
+        clearTimeout(record.rangeReloadTimeout);
         record.plot.destroy();
         canvasCharts.delete(widgetId);
         widget.remove();
@@ -5820,6 +5940,8 @@ async function refreshCanvasWidget(record) {
             record.time = new Float64Array(0);
             record.values = [];
             record.initialScale = null;
+            record.loadedRange = null;
+            record.loadedResolution = null;
             createCanvasPlot(record);
             renderCanvasChannelStrip(record);
             record.element.querySelector('.canvas-widget-title').textContent = 'Drop channel here';
@@ -5844,6 +5966,8 @@ async function refreshCanvasWidget(record) {
         };
         record.initialScale.min = referenceTime[0];
         record.initialScale.max = referenceTime[referenceTime.length - 1];
+        record.loadedRange = { ...record.initialScale };
+        record.loadedResolution = 2000;
         createCanvasPlot(record, referenceTime, alignedValues, nextParameters);
 
         const title = record.element.querySelector('.canvas-widget-title');
