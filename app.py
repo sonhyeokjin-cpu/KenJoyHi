@@ -26,7 +26,6 @@ from backend.bit_extractor import create_bit_extracted_parameter, get_bit_extrac
 from backend.storage import all_metadata, metadata, statistics
 from backend.analysis import derived_channel, fft_channel, filter_channel
 from backend.jobs import cancel_job, public_job, submit_job
-import struct
 import sqlite3
 import re
 import json
@@ -883,66 +882,6 @@ def api_delete_time_segment(segment_id):
         logger.error(f"Error deleting time segment: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/export_pcap', methods=['POST'])
-def export_pcap():
-    try:
-        data = request.get_json(silent=True) or {}
-        parameters = data.get('parameters', [])
-        format_type = data.get('format', '32bit')
-        filename = secure_filename(data.get('filename', 'exported_data')) or 'exported_data'
-        filename = os.path.splitext(filename)[0]
-        
-        if not parameters:
-            return jsonify({'error': 'No parameters selected'}), 400
-        
-        # 모든 파라미터의 데이터와 시간 가져오기
-        all_data = {}
-        all_time = {}
-        global_time_data = None
-        
-        for param in parameters:
-            try:
-                np = get_numpy()
-                db_module = get_backend_module('db')
-                tsdata = db_module['get_timeseries_data'](param, -np.inf, np.inf)
-                if tsdata and tsdata['time'] and tsdata['value']:
-                    all_data[param] = tsdata['value']
-                    all_time[param] = tsdata['time']
-                    if global_time_data is None:
-                        global_time_data = tsdata['time']
-                else:
-                    logger.warning(f"No data available for parameter: {param}")
-            except Exception as e:
-                logger.error(f"Error getting data for parameter {param}: {str(e)}")
-                return jsonify({'error': f'Error getting data for parameter {param}'}), 500
-        
-        if not all_data:
-            return jsonify({'error': 'No valid data found for selected parameters'}), 400
-        
-        # PCAP 파일 생성
-        pcap_data = create_pcap_file_with_param_time(all_data, all_time, format_type)
-        
-        # 파일로 저장
-        pcap_filename = f"{filename}.pcap"
-        pcap_path = os.path.join(app.config['UPLOAD_FOLDER'], pcap_filename)
-        
-        with open(pcap_path, 'wb') as f:
-            f.write(pcap_data)
-        
-        logger.info(f"PCAP file created: {pcap_path}")
-        
-        return send_from_directory(
-            app.config['UPLOAD_FOLDER'], 
-            pcap_filename, 
-            as_attachment=True,
-            download_name=pcap_filename
-        )
-        
-    except Exception as e:
-        logger.error(f"Error exporting PCAP: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/bit_extractor', methods=['POST'])
 def create_bit_extracted_parameter_api():
     """
@@ -1196,81 +1135,6 @@ def check_heartbeat():
 import threading
 heartbeat_thread = threading.Thread(target=check_heartbeat, daemon=True)
 heartbeat_thread.start()
-
-def create_pcap_file_with_param_time(data_dict, time_dict, format_type):
-    """Create a valid classic-PCAP stream from independently timed channels.
-
-    The payload is intentionally a small WaveLab record format, but packet
-    timestamps and IP/UDP length fields follow the PCAP/network conventions.
-    Channels are never indexed by another channel's sample positions.
-    """
-    np = get_numpy()
-    if format_type not in ('16bit', '32bit'):
-        raise ValueError('format must be 16bit or 32bit')
-    pcap_data = bytearray(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
-    ethernet = struct.pack('!6s6sH', b'\x00\x0c\x29\x12\x34\x56',
-                           b'\x00\x0c\x29\xab\xcd\xef', 0x0800)
-    all_times = [float(t) for values in time_dict.values() for t in values
-                 if isinstance(t, (int, float)) and np.isfinite(t)]
-    if not all_times:
-        return bytes(pcap_data)
-    window = 600.0
-    first_window = np.floor(min(all_times) / window) * window
-    last_window = max(all_times)
-    value_fmt = '<f' if format_type == '32bit' else '<h'
-    value_size = 4 if format_type == '32bit' else 2
-    for group_start in np.arange(first_window, last_window + window, window):
-        group_end = group_start + window
-        for param_name, raw_values in data_dict.items():
-            times = np.asarray(time_dict.get(param_name, []), dtype=float)
-            values = np.asarray(raw_values, dtype=float)
-            if times.size != values.size:
-                continue
-            mask = np.isfinite(times) & np.isfinite(values) & (times >= group_start) & (times < group_end)
-            indices = np.flatnonzero(mask)
-            if not indices.size:
-                continue
-            name_bytes = str(param_name).encode('utf-8')[:255]
-            # Split large groups so IPv4/UDP and classic PCAP length limits
-            # cannot overflow.
-            max_values = max(1, (60000 - 16 - len(name_bytes)) // value_size)
-            for offset in range(0, indices.size, max_values):
-                selected = indices[offset:offset + max_values]
-                payload = bytearray(struct.pack('BBBB', 0x21 if format_type == '16bit' else 0xA1, 0x10 if format_type == '16bit' else 0, 0x08 if format_type == '16bit' else 0, 0))
-                payload.extend(struct.pack('<H', len(name_bytes)))
-                payload.extend(name_bytes)
-                payload.extend(struct.pack('<dI', float(times[selected[0]]), int(selected.size)))
-                for idx in selected:
-                    value = float(values[idx])
-                    if format_type == '16bit':
-                        value = max(-32768, min(32767, int(round(value * 1000))))
-                    payload.extend(struct.pack(value_fmt, value))
-                ip = bytearray(struct.pack('!BBHHHBBH4s4s', 69, 0, 20 + 8 + len(payload), 12345, 0, 64, 17, 0, b'\xc0\xa8\x01\x01', b'\xc0\xa8\x01\x02'))
-                ip[10:12] = struct.pack('!H', calculate_checksum(ip))
-                udp = struct.pack('!HHHH', 12345, 54321, 8 + len(payload), 0)
-                packet = ethernet + bytes(ip) + udp + payload
-                sec = int(np.floor(float(times[selected[0]])))
-                usec = int(round((float(times[selected[0]]) - sec) * 1_000_000))
-                if usec >= 1_000_000:
-                    sec, usec = sec + 1, usec - 1_000_000
-                pcap_data.extend(struct.pack('<IIII', sec & 0xffffffff, usec,
-                                             len(packet), len(packet)))
-                pcap_data.extend(packet)
-    return bytes(pcap_data)
-
-def calculate_checksum(data):
-    """IP 체크섬을 계산합니다."""
-    if len(data) % 2 == 1:
-        data += b'\x00'
-    
-    checksum = 0
-    for i in range(0, len(data), 2):
-        checksum += (data[i] << 8) + data[i + 1]
-    
-    while checksum >> 16:
-        checksum = (checksum & 0xFFFF) + (checksum >> 16)
-    
-    return ~checksum & 0xFFFF
 
 # Configuration 관련 API 엔드포인트들
 @app.route('/api/config/upload', methods=['POST'])

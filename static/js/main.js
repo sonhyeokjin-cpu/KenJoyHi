@@ -17,28 +17,37 @@ let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linea
 
 async function runBackgroundJob(kind, payload) {
     const status = document.getElementById('job-status');
+    const indicator = document.getElementById('data-state-indicator');
+    indicator?.classList.remove('idle', 'ready');
+    indicator?.classList.add('busy');
     const created = await fetch(`/api/jobs/${encodeURIComponent(kind)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
     const initial = await created.json();
     if (!created.ok) throw new Error(initial.error || 'Failed to create analysis job');
-    if (status) status.textContent = `${kind}: queued`;
+    if (status) status.textContent = `${kind.toUpperCase()} · QUEUED`;
     while (true) {
         await new Promise(resolve => setTimeout(resolve, 300));
         const response = await fetch(`/api/jobs/${initial.id}`);
         const job = await response.json();
         if (!response.ok) throw new Error(job.error || 'Failed to read job state');
-        if (status) status.textContent = `${kind}: ${job.progress}%`;
+        if (status) status.textContent = `${kind.toUpperCase()} · ${job.progress}%`;
         if (job.state === 'completed') {
+            indicator?.classList.remove('busy', 'idle');
+            indicator?.classList.add('ready');
             if (status) {
-                status.textContent = `${kind}: done`;
-                setTimeout(() => { if (status.textContent === `${kind}: done`) status.textContent = ''; }, 2500);
+                status.textContent = `${kind.toUpperCase()} · DONE`;
+                setTimeout(() => {
+                    if (status.textContent === `${kind.toUpperCase()} · DONE`) status.textContent = 'READY';
+                }, 2500);
             }
             return job.result;
         }
         if (job.state === 'failed' || job.state === 'cancelled') {
-            if (status) status.textContent = `${kind}: ${job.state}`;
+            indicator?.classList.remove('busy', 'idle');
+            indicator?.classList.add('ready');
+            if (status) status.textContent = `${kind.toUpperCase()} · ${job.state.toUpperCase()}`;
             throw new Error(job.error || `Job ${job.state}`);
         }
     }
@@ -152,6 +161,52 @@ const fftPopup = document.getElementById('fft-popup');
 const fftChartElement = document.getElementById('fft-chart');
 const scatterPopup = document.getElementById('scatter-popup');
 const scatterChartElement = document.getElementById('scatter-chart');
+const parameterSearchInput = document.getElementById('parameter-search-input');
+const clearParameterSearchBtn = document.getElementById('clear-parameter-search');
+
+function setDatasetStatus(fileName, state = 'ready') {
+    const fileLabel = document.getElementById('status-file-name');
+    const indicator = document.getElementById('data-state-indicator');
+    if (fileLabel) {
+        fileLabel.textContent = fileName || 'NO DATASET';
+        fileLabel.title = fileName || '';
+    }
+    if (indicator) {
+        indicator.classList.remove('idle', 'ready', 'busy');
+        indicator.classList.add(state);
+    }
+}
+
+function updateParameterResultCount(visible, total) {
+    const count = document.getElementById('parameter-result-count');
+    const statusCount = document.getElementById('status-channel-count');
+    if (count) count.textContent = visible === total ? `${total}` : `${visible} / ${total}`;
+    if (statusCount) statusCount.textContent = `${total.toLocaleString()} CH`;
+}
+
+function applyParameterFilter() {
+    const query = (parameterSearchInput?.value || '').trim().toLocaleLowerCase();
+    const items = Array.from(parametersList.querySelectorAll('.parameter-item'));
+    let visible = 0;
+    items.forEach(item => {
+        const matches = !query || (item.dataset.search || '').includes(query);
+        item.hidden = !matches;
+        if (matches) visible += 1;
+    });
+    parametersList.querySelector('.parameter-empty-state')?.remove();
+    if (items.length && visible === 0) {
+        parametersList.insertAdjacentHTML('beforeend',
+            '<div class="parameter-empty-state">No channels match this search.</div>');
+    }
+    updateParameterResultCount(visible, items.length);
+}
+
+parameterSearchInput?.addEventListener('input', applyParameterFilter);
+clearParameterSearchBtn?.addEventListener('click', () => {
+    parameterSearchInput.value = '';
+    applyParameterFilter();
+    parameterSearchInput.focus();
+});
 
 // Filter button and dropdown handling
 const filterBtn = document.getElementById('filter-btn');
@@ -228,8 +283,9 @@ fileInput.addEventListener('change', async (e) => {
             
             // 업로드된 파일명 표시
             const currentFileDiv = document.getElementById('current-file');
-            currentFileDiv.innerHTML = `<strong>Current File:</strong><br>${file.name}`;
+            currentFileDiv.innerHTML = `<strong>Current File:</strong><br>${escapeHtml(file.name)}`;
             currentFileDiv.style.display = 'block';
+            setDatasetStatus(file.name);
             
             const fileExt = file.name.toLowerCase().split('.').pop();
             
@@ -320,8 +376,9 @@ uploadFixedWingBtn.addEventListener('click', () => {
                 
                 // 업로드된 파일명 표시
                 const currentFileDiv = document.getElementById('current-file');
-                currentFileDiv.innerHTML = `<strong>Current File (Fixed-wing):</strong><br>${file.name}`;
+                currentFileDiv.innerHTML = `<strong>Current File (Fixed-wing):</strong><br>${escapeHtml(file.name)}`;
                 currentFileDiv.style.display = 'block';
+                setDatasetStatus(file.name);
                 
                 const fileExt = file.name.toLowerCase().split('.').pop();
                 
@@ -404,6 +461,10 @@ async function loadParameters() {
         
         parameters = data;
         console.log('Received parameters:', parameters);
+        if (parameters.length > 0) {
+            const fileLabel = document.getElementById('status-file-name');
+            setDatasetStatus(fileLabel?.textContent === 'NO DATASET' ? 'ACTIVE DATASET' : fileLabel?.textContent);
+        }
         
         // Show Description 토글 상태 확인 (전역 변수 사용)
         const showDescription = isShowDescription;
@@ -420,6 +481,7 @@ async function loadParameters() {
         
         if (parameters.length === 0) {
             parametersList.innerHTML = '<div class="info-message">No parameters found. Please upload a MATLAB file first.</div>';
+            updateParameterResultCount(0, 0);
             // New Derived 버튼 비활성화
             const derivedParaBtn = document.getElementById('derived-para-btn');
             if (derivedParaBtn) {
@@ -432,17 +494,21 @@ async function loadParameters() {
         
         parametersList.innerHTML = parameters.map(param => {
             const desc = paramDescMap[param] || '';
+            const safeParam = escapeHtml(param);
+            const safeDesc = escapeHtml(desc);
+            const searchText = escapeHtml(`${param} ${desc}`.toLocaleLowerCase());
             if (showDescription && desc) {
                 return `
-                    <div class="parameter-item" data-parameter="${param}" draggable="true">
-                        <div style="font-weight:600;">${param}</div>
-                        <div style="font-size:13px;color:#666;font-style:italic;">${desc}</div>
+                    <div class="parameter-item" data-parameter="${safeParam}" data-search="${searchText}" draggable="true" title="${safeDesc}">
+                        <div class="parameter-name">${safeParam}</div>
+                        <div class="parameter-description">${safeDesc}</div>
                     </div>
                 `;
             } else {
-                return `<div class="parameter-item" data-parameter="${param}" draggable="true">${param}</div>`;
+                return `<div class="parameter-item" data-parameter="${safeParam}" data-search="${searchText}" draggable="true" title="${safeDesc}"><div class="parameter-name">${safeParam}</div></div>`;
             }
         }).join('');
+        applyParameterFilter();
         
         // Add click handlers for parameters
         document.querySelectorAll('.parameter-item').forEach(item => {
@@ -456,7 +522,7 @@ async function loadParameters() {
                 // 파생파라미터 에디터가 열려 있으면 에디터에만 삽입
                 if (document.getElementById('derived-panel') && document.getElementById('derived-panel').classList.contains('visible')) {
                     if (window.monacoEditor) {
-                        const text = item.textContent.trim();
+                        const text = item.dataset.parameter;
                         const editor = window.monacoEditor;
                         if (typeof editor.executeEdits === 'function' && typeof monaco !== 'undefined') {
                             const position = editor.getPosition();
@@ -499,7 +565,8 @@ async function loadParameters() {
         }
     } catch (error) {
         console.error('Error loading parameters:', error);
-        parametersList.innerHTML = '<div class="error-message">Failed to load parameters</div>';
+            parametersList.innerHTML = '<div class="error-message">Failed to load parameters</div>';
+            updateParameterResultCount(0, 0);
     }
 }
 
@@ -661,6 +728,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Add Derived Para button to toolbar if not present
     const toolbar = document.querySelector('.toolbar');
+    const viewToolbarGroup = document.getElementById('view-toolbar-group') || toolbar;
+    const analysisToolbarGroup = document.getElementById('analysis-toolbar-group') || toolbar;
+    const dataToolbarGroup = document.getElementById('data-toolbar-group') || toolbar;
     let derivedParaBtn = document.getElementById('derived-para-btn');
     let timeSegmentBtn = null;
     if (toolbar && !derivedParaBtn) {
@@ -671,13 +741,7 @@ window.addEventListener('DOMContentLoaded', () => {
         derivedParaBtn.onclick = function() {
             if (typeof window.showDerivedPanel === 'function') window.showDerivedPanel();
         };
-        // Filter 버튼 바로 뒤에 삽입
-        const filterBtn = document.getElementById('filter-btn');
-        if (filterBtn && filterBtn.parentNode) {
-            filterBtn.parentNode.insertAdjacentElement('afterend', derivedParaBtn);
-        } else {
-            toolbar.appendChild(derivedParaBtn);
-        }
+        analysisToolbarGroup.appendChild(derivedParaBtn);
 
         // Time Segment 드롭다운 생성
         if (!document.getElementById('time-segment-dropdown')) {
@@ -699,8 +763,7 @@ window.addEventListener('DOMContentLoaded', () => {
             `;
             timeSegmentDropdown.appendChild(timeSegmentBtn);
             timeSegmentDropdown.appendChild(dropdownContent);
-            // New Derived 버튼 바로 뒤에 삽입
-            derivedParaBtn.insertAdjacentElement('afterend', timeSegmentDropdown);
+            dataToolbarGroup.insertBefore(timeSegmentDropdown, dataToolbarGroup.children[1] || null);
             // 드롭다운 토글: 마우스 오버 시 열림
             timeSegmentDropdown.addEventListener('mouseenter', function() {
                 dropdownContent.style.display = 'block';
@@ -860,64 +923,17 @@ window.addEventListener('DOMContentLoaded', () => {
         timeSegmentBtn = document.getElementById('time-segment-btn');
     }
 
-    // Utility Apps 드롭다운 생성
-    if (!document.getElementById('utility-apps-dropdown')) {
-        const utilityAppsDropdown = document.createElement('div');
-        utilityAppsDropdown.className = 'filter-dropdown';
-        utilityAppsDropdown.id = 'utility-apps-dropdown';
-        // 버튼
+    // Data utility: BIT extractor
+    if (!document.getElementById('utility-apps-btn')) {
         const utilityAppsBtn = document.createElement('button');
         utilityAppsBtn.id = 'utility-apps-btn';
         utilityAppsBtn.className = 'btn';
-        utilityAppsBtn.textContent = 'Data Tools';
-        utilityAppsBtn.style.whiteSpace = 'nowrap'; // 줄바꿈 방지
-        // 드롭다운 메뉴
-        const dropdownContent = document.createElement('div');
-        dropdownContent.className = 'dropdown-content';
-        dropdownContent.innerHTML = `
-            <a href="#" data-utility="export-pcap">Export as .pcap</a>
-            <a href="#" data-utility="bit-extractor">BIT Extractor</a>
-        `;
-        utilityAppsDropdown.appendChild(utilityAppsBtn);
-        utilityAppsDropdown.appendChild(dropdownContent);
-        // Time Segment 버튼 바로 뒤에 삽입
-        const timeSegmentDropdown = document.getElementById('time-segment-dropdown');
-        if (timeSegmentDropdown) {
-            timeSegmentDropdown.insertAdjacentElement('afterend', utilityAppsDropdown);
-        }
-        // 드롭다운 토글: 마우스 오버 시 열림
-        utilityAppsDropdown.addEventListener('mouseenter', function() {
-            dropdownContent.style.display = 'block';
-        });
-        utilityAppsDropdown.addEventListener('mouseleave', function() {
-            dropdownContent.style.display = 'none';
-        });
-        // 외부 클릭 시 닫기
-        document.addEventListener('click', function(e) {
-            if (!utilityAppsDropdown.contains(e.target)) {
-                dropdownContent.style.display = 'none';
-            }
-        });
-        // 메뉴 클릭 핸들러
-        dropdownContent.querySelectorAll('a').forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                const utilityType = link.dataset.utility;
-                
-                switch (utilityType) {
-                    case 'export-pcap':
-                        showPcapExportPopup();
-                        break;
-                    case 'bit-extractor':
-                        showBitExtractorPopup();
-                        break;
-                }
-                
-                dropdownContent.style.display = 'none';
-            });
-        });
+        utilityAppsBtn.textContent = 'BIT Extractor';
+        utilityAppsBtn.style.whiteSpace = 'nowrap';
+        utilityAppsBtn.addEventListener('click', showBitExtractorPopup);
+        dataToolbarGroup.appendChild(utilityAppsBtn);
 
-        // Canvas Button 생성 (Data Tools 버튼 오른쪽에 추가)
+        // Canvas Button 생성
         if (!document.getElementById('canvas-btn')) {
             const canvasBtn = document.createElement('button');
             canvasBtn.id = 'canvas-btn';
@@ -925,11 +941,7 @@ window.addEventListener('DOMContentLoaded', () => {
             canvasBtn.textContent = 'Canvas';
             canvasBtn.style.whiteSpace = 'nowrap';
             
-            if (utilityAppsDropdown) {
-                utilityAppsDropdown.insertAdjacentElement('afterend', canvasBtn);
-            } else {
-                toolbar.appendChild(canvasBtn);
-            }
+            viewToolbarGroup.appendChild(canvasBtn);
             canvasBtn.addEventListener('click', toggleCanvasMode);
         }
     }
@@ -1150,14 +1162,26 @@ function createChart() {
     const chartTitle = document.createElement('div');
     chartTitle.className = 'chart-title';
     chartTitle.textContent = 'Click to select, then choose a parameter';
-    chartTitle.style.fontSize = '16px';
-    chartTitle.style.fontWeight = 'bold';
+
+    const chartHeader = document.createElement('div');
+    chartHeader.className = 'chart-header';
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'chart-drag-handle';
+    dragHandle.textContent = '••';
+    dragHandle.title = 'Drag to reorder chart';
+    const channelCount = document.createElement('span');
+    channelCount.className = 'chart-channel-count';
+    channelCount.textContent = 'EMPTY';
+    chartHeader.appendChild(dragHandle);
+    chartHeader.appendChild(chartTitle);
+    chartHeader.appendChild(channelCount);
     
     const chartElement = document.createElement('div');
+    chartElement.className = 'chart-plot';
     chartElement.style.width = '100%';
     chartElement.style.height = '250px';
     
-    chartContainer.appendChild(chartTitle);
+    chartContainer.appendChild(chartHeader);
     chartContainer.appendChild(chartElement);
     
     // Add context menu listener for deleting parameters
@@ -2697,9 +2721,9 @@ async function updateGlobalTimeInfo() {
         console.log('Fetched global time:', data); // 진단용 로그
         const startStr = formatGlobalTime(data.start);
         const endStr = formatGlobalTime(data.end);
-        document.getElementById('global-time-info').textContent = `Global Time : ${startStr} ~ ${endStr}`;
+        document.getElementById('global-time-info').textContent = `GLOBAL TIME · ${startStr} — ${endStr}`;
     } catch (e) {
-        document.getElementById('global-time-info').textContent = 'Global Time : --';
+        document.getElementById('global-time-info').textContent = 'GLOBAL TIME · --';
         console.error('Global time fetch error:', e); // 진단용 로그
     }
 }
@@ -3037,146 +3061,6 @@ function clearTimeSegmentCache() {
         }
     }
     console.log('Time segment cache cleared');
-}
-
-// PCAP Export 기능
-function showPcapExportPopup() {
-    const popup = document.getElementById('pcap-export-popup');
-    const parameterList = document.getElementById('parameter-selection-list');
-    
-    // 파라미터 목록 가져오기
-    fetch('/api/parameters')
-        .then(res => res.json())
-        .then(parameters => {
-            if (!Array.isArray(parameters) || parameters.length === 0) {
-                alert('No parameters available for export.');
-                return;
-            }
-            
-            // 파라미터 체크박스 생성
-            parameterList.innerHTML = `
-                <div class="select-all-item">
-                    <input type="checkbox" id="select-all-params">
-                    <label for="select-all-params">Select All Parameters</label>
-                </div>
-                ${parameters.map(param => `
-                    <div class="parameter-selection-item">
-                        <input type="checkbox" id="param-${param}" value="${param}">
-                        <label for="param-${param}">${param}</label>
-                    </div>
-                `).join('')}
-            `;
-            
-            // Select All 체크박스 이벤트
-            const selectAllCheckbox = document.getElementById('select-all-params');
-            const parameterCheckboxes = parameterList.querySelectorAll('.parameter-selection-item input[type="checkbox"]');
-            
-            selectAllCheckbox.addEventListener('change', function() {
-                parameterCheckboxes.forEach(checkbox => {
-                    checkbox.checked = this.checked;
-                });
-            });
-            
-            // 개별 체크박스 변경 시 Select All 상태 업데이트
-            parameterCheckboxes.forEach(checkbox => {
-                checkbox.addEventListener('change', function() {
-                    const allChecked = Array.from(parameterCheckboxes).every(cb => cb.checked);
-                    const anyChecked = Array.from(parameterCheckboxes).some(cb => cb.checked);
-                    selectAllCheckbox.checked = allChecked;
-                    selectAllCheckbox.indeterminate = anyChecked && !allChecked;
-                });
-            });
-            
-            // 체크박스 클릭 이벤트
-            parameterList.querySelectorAll('.parameter-selection-item').forEach(checkbox => {
-                checkbox.addEventListener('click', function(e) {
-                    if (e.target.type !== 'checkbox') {
-                        const input = this.querySelector('input[type="checkbox"]');
-                        input.checked = !input.checked;
-                        input.dispatchEvent(new Event('change'));
-                    }
-                    this.classList.toggle('selected', this.querySelector('input[type="checkbox"]').checked);
-                });
-            });
-            
-            // 팝업 표시
-            popup.style.display = 'flex';
-            
-            // 닫기 버튼 이벤트
-            popup.querySelector('.close-btn').onclick = () => {
-                popup.style.display = 'none';
-            };
-            
-            // Cancel 버튼 이벤트
-            document.getElementById('cancel-pcap-btn').onclick = () => {
-                popup.style.display = 'none';
-            };
-            
-            // Export 버튼 이벤트
-            document.getElementById('export-pcap-btn').onclick = () => {
-                exportToPcap();
-            };
-        })
-        .catch(error => {
-            console.error('Error loading parameters for PCAP export:', error);
-            alert('Failed to load parameters for export.');
-        });
-}
-
-function exportToPcap() {
-    const selectedParameters = [];
-    const checkboxes = document.querySelectorAll('#parameter-selection-list input[type="checkbox"]:checked');
-    
-    checkboxes.forEach(checkbox => {
-        selectedParameters.push(checkbox.value);
-    });
-    
-    if (selectedParameters.length === 0) {
-        alert('Please select at least one parameter to export.');
-        return;
-    }
-    
-    const dataFormat = document.querySelector('input[name="data-format"]:checked').value;
-    const filename = document.getElementById('pcap-filename').value.trim() || 'exported_data';
-    
-    // 백엔드로 export 요청
-    fetch('/api/export_pcap', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            parameters: selectedParameters,
-            format: dataFormat,
-            filename: filename
-        })
-    })
-    .then(response => {
-        if (response.ok) {
-            return response.blob();
-        } else {
-            throw new Error('Export failed');
-        }
-    })
-    .then(blob => {
-        // 파일 다운로드
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${filename}.pcap`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        // 팝업 닫기
-        document.getElementById('pcap-export-popup').style.display = 'none';
-        alert('PCAP file exported successfully!');
-    })
-    .catch(error => {
-        console.error('Export error:', error);
-        alert('Failed to export PCAP file. Please try again.');
-    });
 }
 
 // BIT Extractor Popup logic
@@ -4862,8 +4746,19 @@ function addLimitLineSeries(chart, config) {
 // 차트 타이틀 업데이트 함수
 function updateChartTitle(chart) {
     const chartContainer = document.getElementById(chart.id);
+    if (!chartContainer) return;
     const titleElement = chartContainer.querySelector('.chart-title');
+    const countElement = chartContainer.querySelector('.chart-channel-count');
     if (!titleElement) return;
+
+    if (countElement) {
+        countElement.textContent = chart.parameters.length ? `${chart.parameters.length} CH` : 'EMPTY';
+    }
+
+    if (chart.parameters.length === 0) {
+        titleElement.textContent = 'Select chart, then choose a channel';
+        return;
+    }
     
     if (isShowDescription) {
         // Description 표시 모드
@@ -4878,7 +4773,7 @@ function updateChartTitle(chart) {
             // Description이 있으면 Description 사용, 없으면 파라미터 이름 사용
             const displayText = description && description.trim() !== '' ? description : param;
             
-            return `<span style="color: ${color}">${displayText}</span>`;
+            return `<span style="color: ${color}">${escapeHtml(displayText)}</span>`;
         }).join(' vs ');
         
         titleElement.innerHTML = coloredTitle;
@@ -4887,7 +4782,7 @@ function updateChartTitle(chart) {
         const seriesColors = ['#2196F3', '#FF5722', '#4CAF50']; // 라인 색상 배열
         const coloredTitle = chart.parameters.map((param, index) => {
             const color = seriesColors[index % seriesColors.length];
-            return `<span style="color: ${color}">${param}</span>`;
+            return `<span style="color: ${color}">${escapeHtml(param)}</span>`;
         }).join(' vs ');
         
         titleElement.innerHTML = coloredTitle;
