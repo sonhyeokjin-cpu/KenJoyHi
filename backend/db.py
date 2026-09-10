@@ -259,58 +259,8 @@ def get_parameters():
         if conn:
             conn.close()
 
-def downsample_data(time_data, value_data, resolution):
-    """
-    Downsample time series data using a min/max approach for visualization.
-    """
-    if resolution is None or len(time_data) <= resolution:
-        return time_data, value_data
-
-    n = len(time_data)
-    bucket_size = n / resolution
-    
-    out_time = []
-    out_value = []
-
-    for i in range(resolution):
-        start_idx = int(i * bucket_size)
-        end_idx = int((i + 1) * bucket_size)
-        if start_idx >= n:
-            break
-        
-        bucket = value_data[start_idx:end_idx]
-        if len(bucket) == 0:
-            continue
-
-        min_val_idx = np.argmin(bucket)
-        max_val_idx = np.argmax(bucket)
-        
-        # Get original indices
-        min_orig_idx = start_idx + min_val_idx
-        max_orig_idx = start_idx + max_val_idx
-
-        # Add points in chronological order
-        if min_orig_idx < max_orig_idx:
-            out_time.append(time_data[min_orig_idx])
-            out_value.append(value_data[min_orig_idx])
-            out_time.append(time_data[max_orig_idx])
-            out_value.append(value_data[max_orig_idx])
-        elif max_orig_idx < min_orig_idx:
-            out_time.append(time_data[max_orig_idx])
-            out_value.append(value_data[max_orig_idx])
-            out_time.append(time_data[min_orig_idx])
-            out_value.append(value_data[min_orig_idx])
-        else: # min and max are the same point
-            out_time.append(time_data[min_orig_idx])
-            out_value.append(value_data[min_orig_idx])
-
-    return np.array(out_time), np.array(out_value)
-
-def get_timeseries_data(parameter, start, end, resolution=None, file_type=None):
-    from .storage import envelope, read_arrays, metadata
-    if resolution is not None:
-        t, y, meta = envelope(DB_PATH, parameter, start, end, resolution)
-        return {'time': t, 'value': y, 'metadata': meta, 'representation': 'envelope'}
+def get_timeseries_data(parameter, start, end):
+    from .storage import read_arrays, metadata
     t, y = read_arrays(DB_PATH, parameter, start, end)
     return {'time': t.tolist(), 'value': [float(v) if np.isfinite(v) else None for v in y],
             'metadata': metadata(DB_PATH, parameter), 'representation': 'raw'}
