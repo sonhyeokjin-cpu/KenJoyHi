@@ -1625,20 +1625,42 @@ function validTimeRange(min, max) {
         : null;
 }
 
-async function getGlobalChartRange() {
-    if (globalChartRange) return { ...globalChartRange };
+async function getGlobalChartRange(referenceRange = null) {
+    // The API and channel samples must use the same time coordinate system.
+    // If a legacy database still exposes an absolute range while its samples
+    // are relative to the first sample, reject that non-overlapping range and
+    // fall back to the range returned by the parameter itself.
+    const requested = validTimeRange(referenceRange?.min, referenceRange?.max);
+    const isCompatible = range => {
+        if (!range) return false;
+        if (!requested) return true;
+        return range.max >= requested.min && range.min <= requested.max;
+    };
+
+    const cached = validTimeRange(globalChartRange?.min, globalChartRange?.max);
+    if (cached && isCompatible(cached)) return { ...cached };
+    if (cached && requested && !isCompatible(cached)) {
+        globalChartRange = null;
+    }
+
     try {
         const response = await fetch('/api/global_time');
         const data = await response.json();
         if (response.ok) {
-            const range = validTimeRange(data.start, data.end);
-            if (range) {
+            const range = validTimeRange(data.data_start, data.data_end)
+                || validTimeRange(data.start, data.end);
+            if (range && isCompatible(range)) {
                 globalChartRange = range;
                 return { ...range };
             }
         }
     } catch (error) {
         console.warn('Global time range unavailable; using loaded chart ranges.', error);
+    }
+
+    if (requested) {
+        globalChartRange = { ...requested };
+        return { ...requested };
     }
 
     const ranges = charts
@@ -1652,7 +1674,6 @@ async function getGlobalChartRange() {
     };
     return { ...globalChartRange };
 }
-
 function setChartXRange(chart, range) {
     if (!chart?.plot) return;
     chart.suppressRangeReload = true;
@@ -1787,7 +1808,7 @@ async function updateChart(chartId, parameter) {
                 min: data.firstTimestamp,
                 max: data.lastTimestamp
             };
-            const initialScale = (await getGlobalChartRange()) || dataRange;
+            const initialScale = (await getGlobalChartRange(dataRange)) || dataRange;
 
             chart.initialScale = initialScale;
             chart.lastZoom = initialScale;
@@ -2894,7 +2915,10 @@ async function updateGlobalTimeInfo() {
         const resp = await fetch('/api/global_time');
         if (!resp.ok) throw new Error('Failed to fetch global time');
         const data = await resp.json();
-        globalChartRange = validTimeRange(data.start, data.end);
+        // Keep the chart cache in sample coordinates; start/end are
+        // retained as source-clock values for the header display.
+        globalChartRange = validTimeRange(data.data_start, data.data_end)
+            || validTimeRange(data.start, data.end);
         console.log('Fetched global time:', data); // 진단용 로그
         const startStr = formatGlobalTime(data.start);
         const endStr = formatGlobalTime(data.end);
