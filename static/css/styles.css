@@ -121,7 +121,8 @@ body {
     padding: 0;
     display: none;
     gap: 2.5px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     min-height: 0;
     width: 100%;
     box-sizing: border-box;
@@ -2169,7 +2170,10 @@ th {
 }
 
 .chart-plot {
+    flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
+    width: 100%;
 }
 
 .chart-container.selected,
@@ -2442,6 +2446,23 @@ th {
     color: #7f93a8;
 }
 
+.unit-source-select {
+    width: 100%;
+    justify-content: center;
+    margin: -7px 0 14px;
+    border: 1px solid #2f4964;
+    background: #132238;
+    color: #9ddcff;
+    font-size: 10px;
+}
+
+.unit-source-select:hover:not(:disabled),
+.unit-source-select.active {
+    border-color: var(--accent-color);
+    background: #173553;
+    color: #ffffff;
+}
+
 .unit-direction-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr);
@@ -2656,6 +2677,8 @@ th {
 .plot-area {
     position: relative;
     z-index: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 @media (max-width: 1200px) {
