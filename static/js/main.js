@@ -1625,20 +1625,41 @@ function validTimeRange(min, max) {
         : null;
 }
 
-async function getGlobalChartRange() {
-    if (globalChartRange) return { ...globalChartRange };
+async function getGlobalChartRange(referenceRange = null) {
+    // The API and channel samples must use the same time coordinate system.
+    // If a legacy database still exposes an absolute range while its samples
+    // are relative to the first sample, reject that non-overlapping range and
+    // fall back to the range returned by the parameter itself.
+    const requested = validTimeRange(referenceRange?.min, referenceRange?.max);
+    const isCompatible = range => {
+        if (!range) return false;
+        if (!requested) return true;
+        return range.max >= requested.min && range.min <= requested.max;
+    };
+
+    const cached = validTimeRange(globalChartRange?.min, globalChartRange?.max);
+    if (cached && isCompatible(cached)) return { ...cached };
+    if (cached && requested && !isCompatible(cached)) {
+        globalChartRange = null;
+    }
+
     try {
         const response = await fetch('/api/global_time');
         const data = await response.json();
         if (response.ok) {
             const range = validTimeRange(data.start, data.end);
-            if (range) {
+            if (range && isCompatible(range)) {
                 globalChartRange = range;
                 return { ...range };
             }
         }
     } catch (error) {
         console.warn('Global time range unavailable; using loaded chart ranges.', error);
+    }
+
+    if (requested) {
+        globalChartRange = { ...requested };
+        return { ...requested };
     }
 
     const ranges = charts
@@ -1652,7 +1673,6 @@ async function getGlobalChartRange() {
     };
     return { ...globalChartRange };
 }
-
 function setChartXRange(chart, range) {
     if (!chart?.plot) return;
     chart.suppressRangeReload = true;
@@ -1787,7 +1807,7 @@ async function updateChart(chartId, parameter) {
                 min: data.firstTimestamp,
                 max: data.lastTimestamp
             };
-            const initialScale = (await getGlobalChartRange()) || dataRange;
+            const initialScale = (await getGlobalChartRange(dataRange)) || dataRange;
 
             chart.initialScale = initialScale;
             chart.lastZoom = initialScale;
