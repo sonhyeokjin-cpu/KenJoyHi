@@ -11,7 +11,6 @@ let isRestoringLayout = false; // 차트 레이아웃 복원 중인지 여부 �
 let isFixedScale = false; // Fixed Scale 토글 상태
 let isShowDescription = false; // Show Description 토글 상태
 let lineAlphaPercent = 0; // 라인 투명도 (% 0~100)
-let gridStack = null; // GridStack instance
 let isCanvasMode = false; // Canvas mode state
 let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linear';
 
@@ -210,11 +209,67 @@ clearParameterSearchBtn?.addEventListener('click', () => {
 
 // Filter button and dropdown handling
 const filterBtn = document.getElementById('filter-btn');
-const filterPopup = document.getElementById('filter-popup');
-const filterInfoPopup = document.getElementById('filter-info-popup');
+const analysisInspector = document.getElementById('analysis-inspector');
+const filterInfoPanel = document.getElementById('filter-info-panel');
 const filterInfoText = document.getElementById('filter-info-text');
 
 let currentFilterType = null;
+
+function updateInspectorSelection() {
+    const summary = document.getElementById('inspector-selection-summary');
+    if (!summary) return;
+    const selected = charts.filter(chart =>
+        document.getElementById(chart.id)?.classList.contains('selected'));
+    if (!selected.length) {
+        summary.textContent = isCanvasMode ? 'Canvas workspace active' : 'No chart selected';
+        return;
+    }
+    const channelNames = selected.flatMap(chart => chart.parameters).filter(Boolean);
+    const channelSummary = channelNames.length
+        ? channelNames.slice(0, 3).join(' · ') + (channelNames.length > 3 ? ` +${channelNames.length - 3}` : '')
+        : 'Empty chart';
+    summary.textContent = `${selected.length} chart${selected.length > 1 ? 's' : ''} · ${channelSummary}`;
+}
+
+function setInspectorTab(tabName) {
+    document.querySelectorAll('.inspector-tab').forEach(tab => {
+        const active = tab.dataset.inspectorTab === tabName;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+    });
+    document.querySelectorAll('.inspector-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.inspectorPanel === tabName);
+    });
+}
+
+function resizeVisibleCharts() {
+    if (isCanvasMode) {
+        resizeCanvasCharts();
+    } else {
+        updateGridLayout();
+    }
+}
+
+function openInspector(tabName = 'scale') {
+    if (!analysisInspector) return;
+    setInspectorTab(tabName);
+    updateInspectorSelection();
+    analysisInspector.classList.add('open');
+    analysisInspector.setAttribute('aria-hidden', 'false');
+    setTimeout(resizeVisibleCharts, 220);
+}
+
+function closeInspector() {
+    if (!analysisInspector) return;
+    analysisInspector.classList.remove('open');
+    analysisInspector.setAttribute('aria-hidden', 'true');
+    setTimeout(resizeVisibleCharts, 220);
+}
+
+document.getElementById('close-inspector')?.addEventListener('click', closeInspector);
+document.querySelectorAll('.inspector-tab').forEach(tab => {
+    tab.addEventListener('click', () => setInspectorTab(tab.dataset.inspectorTab));
+});
 
 // Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
@@ -233,7 +288,7 @@ document.querySelectorAll('.tab').forEach(tab => {
             const canvasArea = document.getElementById('canvas-area');
             if (isCanvasMode) {
                 plotArea.style.display = 'none';
-                if (canvasArea) canvasArea.style.display = 'block';
+                if (canvasArea) canvasArea.style.display = 'flex';
             } else {
                 plotArea.style.display = 'grid';
                 if (canvasArea) canvasArea.style.display = 'none';
@@ -520,7 +575,9 @@ async function loadParameters() {
 
             item.addEventListener('click', (e) => {
                 // 파생파라미터 에디터가 열려 있으면 에디터에만 삽입
-                if (document.getElementById('derived-panel') && document.getElementById('derived-panel').classList.contains('visible')) {
+                if (isCanvasMode && selectedCanvasWidgetId) {
+                    addParameterToCanvasWidget(selectedCanvasWidgetId, item.dataset.parameter);
+                } else if (document.getElementById('derived-panel') && document.getElementById('derived-panel').classList.contains('visible')) {
                     if (window.monacoEditor) {
                         const text = item.dataset.parameter;
                         const editor = window.monacoEditor;
@@ -989,6 +1046,10 @@ addChartBtn.addEventListener('click', () => {
 
 // 차트 삭제 시 빈 타일 유지 (DOM에서만 제거, grid cell은 유지)
 window.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' && isCanvasMode && selectedCanvasWidgetId) {
+        document.getElementById(selectedCanvasWidgetId)?.querySelector('.canvas-remove-btn')?.click();
+        return;
+    }
     if (e.key === 'Delete' && (selectedChart || selectedCharts.length > 0)) {
         // 여러 차트가 선택된 경우 모든 선택된 차트 삭제
         const chartsToDelete = selectedCharts.length > 0 ? selectedCharts : [selectedChart];
@@ -1947,6 +2008,7 @@ function updateButtonStates() {
             utilityAppsBtn.classList.add('disabled');
         }
     }
+    updateInspectorSelection();
 }
 
 // FFT 버튼 클릭 이벤트
@@ -2275,8 +2337,9 @@ scatterPopup.querySelector('.close-btn').addEventListener('click', () => {
 // Show filter form based on selected filter type
 document.querySelectorAll('.dropdown-content a').forEach(link => {
     link.addEventListener('click', (e) => {
+        if (!e.currentTarget.dataset.filter) return;
         e.preventDefault();
-        currentFilterType = e.target.dataset.filter;
+        currentFilterType = e.currentTarget.dataset.filter;
         
         // Hide all filter forms
         document.querySelectorAll('.filter-form-content').forEach(form => {
@@ -2285,9 +2348,12 @@ document.querySelectorAll('.dropdown-content a').forEach(link => {
         
         // Show selected filter form
         document.getElementById(`${currentFilterType}-form`).style.display = 'block';
+        const filterNames = { lpf: 'Low-pass Filter', bpf: 'Band-pass Filter', ma: 'Moving Average', rms: 'RMS' };
+        const title = document.getElementById('active-filter-title');
+        if (title) title.textContent = filterNames[currentFilterType] || 'Filter';
+        if (filterInfoPanel) filterInfoPanel.hidden = true;
         
-        // Show filter popup
-        filterPopup.style.display = 'flex';
+        openInspector('filter');
     });
 });
 
@@ -2433,10 +2499,7 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
                 }
             }
             
-            filterInfoPopup.style.display = 'flex';
-            
-            // Close filter popup
-            filterPopup.style.display = 'none';
+            if (filterInfoPanel) filterInfoPanel.hidden = false;
 
             // 파라미터 리스트 업데이트
             if (typeof loadParameters === 'function') {
@@ -2446,16 +2509,6 @@ document.getElementById('apply-filter').addEventListener('click', async () => {
     } catch (error) {
         console.error('Error applying filter:', error);
         alert('Error applying filter: ' + error.message);
-    }
-});
-
-// Close filter info popup
-filterInfoPopup.querySelector('.close-btn').addEventListener('click', () => {
-    filterInfoPopup.style.display = 'none';
-    // Clean up charts
-    if (window.filterCharts) {
-        window.filterCharts.forEach(chart => chart.destroy());
-        window.filterCharts = null;
     }
 });
 
@@ -2565,60 +2618,15 @@ async function capturePlotArea() {
     }
 }
 
-// Scale dialog HTML
-const scaleDialogHTML = `
-<div id="scaleDialog" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>Scale Settings</h2>
-            <span class="close">&times;</span>
-        </div>
-        <div class="modal-body">
-            <div class="scale-section">
-                <h3>X-Axis Scale (Common for All Charts)</h3>
-                <div class="input-group">
-                    <label>Min:</label>
-                    <input type="number" id="xMin" step="any">
-                </div>
-                <div class="input-group">
-                    <label>Max:</label>
-                    <input type="number" id="xMax" step="any">
-                </div>
-            </div>
-            <div class="scale-section">
-                <h3>Y-Axis Scale (Selected Charts Only)</h3>
-                <div class="input-group">
-                    <label>Min:</label>
-                    <input type="number" id="yMin" step="any">
-                </div>
-                <div class="input-group">
-                    <label>Max:</label>
-                    <input type="number" id="yMax" step="any">
-                </div>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button id="applyScale" class="btn btn-primary">Apply</button>
-            <button id="cancelScale" class="btn btn-secondary">Cancel</button>
-        </div>
-    </div>
-</div>
-`;
-
-// Add scale dialog to the document
-document.body.insertAdjacentHTML('beforeend', scaleDialogHTML);
-
-// Scale dialog elements
-const scaleDialog = document.getElementById('scaleDialog');
-const closeScaleBtn = scaleDialog?.querySelector('.close');
-const cancelScaleBtn = document.getElementById('cancelScale');
+// Scale inspector elements
 const applyScaleBtn = document.getElementById('applyScale');
+const resetYScaleBtn = document.getElementById('resetYScale');
 const xMinInput = document.getElementById('xMin');
 const xMaxInput = document.getElementById('xMax');
 const yMinInput = document.getElementById('yMin');
 const yMaxInput = document.getElementById('yMax');
 
-// Show scale dialog
+// Open scale inspector
 scaleBtn?.addEventListener('click', () => {
     const selectedCharts = document.querySelectorAll('.chart-container.selected');
     if (selectedCharts.length === 0) {
@@ -2636,30 +2644,7 @@ scaleBtn?.addEventListener('click', () => {
         yMaxInput.value = scales.y.max;
     }
 
-    // Update dialog title to show number of selected charts
-    const dialogTitle = scaleDialog.querySelector('.modal-header h2');
-    if (selectedCharts.length === 1) {
-        dialogTitle.textContent = 'Scale Settings (1 Chart Selected for Y-axis)';
-    } else {
-        dialogTitle.textContent = `Scale Settings (${selectedCharts.length} Charts Selected for Y-axis)`;
-    }
-
-    scaleDialog.style.display = 'block';
-});
-
-// Close scale dialog
-closeScaleBtn?.addEventListener('click', () => {
-    scaleDialog.style.display = 'none';
-    // Reset dialog title
-    const dialogTitle = scaleDialog.querySelector('.modal-header h2');
-    dialogTitle.textContent = 'Scale Settings';
-});
-
-cancelScaleBtn?.addEventListener('click', () => {
-    scaleDialog.style.display = 'none';
-    // Reset dialog title
-    const dialogTitle = scaleDialog.querySelector('.modal-header h2');
-    dialogTitle.textContent = 'Scale Settings';
+    openInspector('scale');
 });
 
 // Apply scale changes
@@ -2695,7 +2680,16 @@ applyScaleBtn?.addEventListener('click', () => {
         }
     });
 
-    scaleDialog.style.display = 'none';
+    showNotification('Scale applied to the selected chart set.');
+});
+
+resetYScaleBtn?.addEventListener('click', () => {
+    const selected = document.querySelectorAll('.chart-container.selected');
+    selected.forEach(container => {
+        const chart = charts.find(item => item.id === container.id);
+        chart?.plot?.setScale('y', { min: null, max: null });
+    });
+    if (selected.length) showNotification('Selected chart Y axes restored to auto scale.');
 });
 
 // Global Time 표시 함수
@@ -3031,11 +3025,6 @@ function extractParameterNamesFromCode(code, availableParams) {
     }
     return usedParams;
 }
-
-// Add close handler for filter popup
-filterPopup.querySelector('.close-btn').addEventListener('click', () => {
-    filterPopup.style.display = 'none';
-});
 
 // Time segment 캐시 초기화 함수
 function clearTimeSegmentCache() {
@@ -5547,365 +5536,221 @@ function pasteToSelectedRow() {
 }
 
 // Canvas Mode Functions
+// Native implementation: bundled uPlot only; no optional runtime dependency.
+const canvasCharts = new Map();
+let selectedCanvasWidgetId = null;
+
 function toggleCanvasMode() {
-    if (typeof GridStack === 'undefined' || typeof echarts === 'undefined') {
-        showNotification('Canvas mode requires the optional ECharts/GridStack libraries.', 'error');
-        return;
-    }
     isCanvasMode = !isCanvasMode;
     const canvasBtn = document.getElementById('canvas-btn');
     const plotArea = document.getElementById('plot-area');
     const canvasArea = document.getElementById('canvas-area');
-    
+    if (!canvasArea || !plotArea) return;
+
+    canvasBtn?.classList.toggle('primary', isCanvasMode);
+    plotArea.style.display = isCanvasMode ? 'none' : 'grid';
+    canvasArea.style.display = isCanvasMode ? 'flex' : 'none';
+
     if (isCanvasMode) {
-        canvasBtn.classList.add('primary');
-        plotArea.style.display = 'none';
-        canvasArea.style.display = 'block';
-        
-        // Initialize GridStack if not already initialized
-        if (!gridStack) {
-            gridStack = GridStack.init({
-                cellHeight: 100,
-                margin: 5,
-                float: true,
-                disableOneColumnMode: true,
-                acceptWidgets: true,
-                draggable: { handle: '.drag-handle' }
-            }, canvasArea);
-            
-            // Handle resize events for ECharts
-            gridStack.on('resizestop', function(event, el) {
-                const content = el.querySelector('.grid-stack-item-content');
-                const chartDiv = content.querySelector('.echarts-container');
-                if (chartDiv) {
-                    const chart = echarts.getInstanceByDom(chartDiv);
-                    if (chart) chart.resize();
-                }
-            });
-        }
+        if (canvasCharts.size === 0) addCanvasChart();
+        showNotification('Canvas workspace enabled. Select a card, then click or drag a channel.');
+        resizeCanvasCharts();
     } else {
-        canvasBtn.classList.remove('primary');
-        plotArea.style.display = 'grid';
-        canvasArea.style.display = 'none';
+        selectedCanvasWidgetId = null;
         updateGridLayout();
     }
+    updateInspectorSelection();
+}
+
+function canvasPlotOptions(host) {
+    return {
+        width: Math.max(320, host.clientWidth || 480),
+        height: Math.max(180, host.clientHeight || 250),
+        cursor: {
+            show: true,
+            sync: { key: 'shared' },
+            drag: { setScale: true, x: true, y: false }
+        },
+        scales: { x: { time: false, auto: false }, y: { auto: true } },
+        axes: [
+            { scale: 'x', stroke: '#475569', grid: { stroke: '#e2e8f0', width: 1 }, size: 30 },
+            { scale: 'y', stroke: '#0284c7', grid: { stroke: '#edf2f7', width: 1 }, size: 42 }
+        ],
+        series: [
+            { label: 'Time' },
+            { label: '', stroke: baseSeriesColors[0], width: 1 },
+            { label: '', stroke: baseSeriesColors[1], width: 1 },
+            { label: '', stroke: baseSeriesColors[2], width: 1 }
+        ],
+        padding: [8, 8, 6, 6]
+    };
+}
+
+function selectCanvasWidget(widgetId) {
+    selectedCanvasWidgetId = widgetId;
+    canvasCharts.forEach(record => record.element.classList.toggle('selected', record.id === widgetId));
+    updateInspectorSelection();
 }
 
 function addCanvasChart() {
-    if (!gridStack || typeof echarts === 'undefined') return;
-    
-    const widgetId = `widget-${Date.now()}`;
-    const chartId = `echart-${Date.now()}`;
-    
-    const widgetHtml = `
-        <div class="grid-stack-item" gs-w="6" gs-h="4">
-            <div class="grid-stack-item-content" style="background: white; border: 1px solid #ccc; border-radius: 4px; padding: 10px; display: flex; flex-direction: column; overflow: hidden;">
-                <div class="drag-handle" style="cursor: move; padding: 5px; background: #f5f5f5; border-bottom: 1px solid #eee; margin: -10px -10px 10px -10px; border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; font-size: 12px;">Canvas Chart</span>
-                    <div style="display: flex; align-items: center;">
-                        <label style="font-size: 12px; margin-right: 10px; display: flex; align-items: center; cursor: pointer;" title="Enable/Disable Dragging">
-                            <input type="checkbox" class="move-toggle" checked style="margin-right: 4px;"> Move/Zoom
-                        </label>
-                        <button class="reset-zoom-btn" style="border: none; background: none; cursor: pointer; color: #666; font-size: 14px; margin-right: 5px;" title="Reset Zoom">⟲</button>
-                        <button class="settings-widget-btn" style="border: none; background: none; cursor: pointer; color: #666; font-size: 14px; margin-right: 5px;" title="Settings">⚙️</button>
-                        <button class="remove-widget-btn" style="border: none; background: none; cursor: pointer; color: #999; font-size: 16px;" title="Remove">&times;</button>
-                    </div>
-                </div>
-                <div id="${chartId}" class="echarts-container" style="flex: 1; width: 100%; min-height: 0;"></div>
-            </div>
-        </div>
-    `;
-    
-    const el = gridStack.addWidget(widgetHtml);
-    
-    // Handle Move Toggle
-    const moveToggle = el.querySelector('.move-toggle');
-    if (moveToggle) {
-        moveToggle.addEventListener('change', (e) => {
-            const isMovable = e.target.checked;
-            gridStack.update(el, { noMove: !isMovable });
-            
-            const dragHandle = el.querySelector('.drag-handle');
-            if (dragHandle) {
-                dragHandle.style.cursor = isMovable ? 'move' : 'default';
-                dragHandle.style.backgroundColor = isMovable ? '#f5f5f5' : '#e9e9e9';
-            }
+    const canvasArea = document.getElementById('canvas-area');
+    if (!canvasArea || canvasCharts.size >= MAX_CHARTS) return;
 
-            // Toggle Zoom based on Move state (Move checked -> Zoom disabled)
-            const chartContainer = el.querySelector(`#${chartId}`);
-            if (chartContainer) {
-                const chart = echarts.getInstanceByDom(chartContainer);
-                if (chart) {
-                    chart.setOption({
-                        dataZoom: [
-                            { id: 'zoomX', disabled: isMovable },
-                            { id: 'zoomY', disabled: isMovable }
-                        ]
-                    });
-                }
-            }
-        });
-        // Prevent drag start when clicking the checkbox
-        moveToggle.addEventListener('mousedown', (e) => e.stopPropagation());
-    }
+    const widgetId = 'canvas-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7);
+    const widget = document.createElement('article');
+    widget.id = widgetId;
+    widget.className = 'canvas-widget';
+    widget.innerHTML =
+        '<header class="canvas-widget-header" draggable="true">' +
+            '<span class="canvas-widget-handle" title="Drag to reorder">••</span>' +
+            '<span class="canvas-widget-title">Drop channel here</span>' +
+            '<span class="canvas-widget-count">EMPTY</span>' +
+            '<button class="canvas-reset-btn" type="button" title="Reset zoom">↺</button>' +
+            '<button class="canvas-remove-btn" type="button" title="Remove chart">×</button>' +
+        '</header>' +
+        '<div class="canvas-plot-host"></div>';
+    canvasArea.appendChild(widget);
 
-    // Handle Reset Zoom Button
-    const resetZoomBtn = el.querySelector('.reset-zoom-btn');
-    if (resetZoomBtn) {
-        resetZoomBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const chartContainer = el.querySelector(`#${chartId}`);
-            if (chartContainer) {
-                const chart = echarts.getInstanceByDom(chartContainer);
-                if (chart) {
-                    chart.dispatchAction({
-                        type: 'dataZoom',
-                        batch: [
-                            { dataZoomId: 'zoomX', start: 0, end: 100 },
-                            { dataZoomId: 'zoomY', start: 0, end: 100 }
-                        ]
-                    });
-                }
-            }
-        });
-    }
-
-    // Initialize ECharts after DOM update
-    setTimeout(() => {
-        const chartContainer = el.querySelector(`#${chartId}`);
-        if (chartContainer) {
-            const myChart = echarts.init(chartContainer);
-            
-            // Default empty option or sample data
-            const option = {
-                title: { text: 'New Chart', left: 'center', top: 'center', textStyle: { color: '#ccc' } },
-                tooltip: { trigger: 'axis' },
-                grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-                xAxis: { type: 'category', boundaryGap: false, data: [] },
-                yAxis: { type: 'value' },
-                series: [],
-                // Default Zoom settings
-                dataZoom: [
-                    { type: 'inside', xAxisIndex: 0, disabled: true, id: 'zoomX' },
-                    { type: 'inside', yAxisIndex: 0, disabled: true, id: 'zoomY' }
-                ]
-            };
-            myChart.setOption(option);
-            
-            // Handle remove button
-            const removeBtn = el.querySelector('.remove-widget-btn');
-            if (removeBtn) {
-                removeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    gridStack.removeWidget(el);
-                    myChart.dispose();
-                });
-            }
-
-            // Handle settings button
-            const settingsBtn = el.querySelector('.settings-widget-btn');
-            if (settingsBtn) {
-                settingsBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    openCanvasSettings(chartId);
-                });
-            }
-            
-            // Add Drop Event Listeners for Parameter Visualization
-            chartContainer.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'copy';
-                chartContainer.style.backgroundColor = '#f0f8ff';
-                chartContainer.style.border = '2px dashed #2196F3';
-            });
-
-            chartContainer.addEventListener('dragleave', (e) => {
-                chartContainer.style.backgroundColor = '';
-                chartContainer.style.border = 'none';
-            });
-
-            chartContainer.addEventListener('drop', async (e) => {
-                e.preventDefault();
-                chartContainer.style.backgroundColor = '';
-                chartContainer.style.border = 'none';
-                const paramName = e.dataTransfer.getData('text/plain');
-                
-                if (paramName) {
-                    myChart.showLoading();
-                    try {
-                        // Fetch full data
-                        const data = await fetchChartData(paramName, -Infinity, Infinity);
-                        
-                        if (data.time && data.value) {
-                            const seriesData = [];
-                            const len = Math.min(data.time.length, data.value.length);
-                            for (let i = 0; i < len; i++) {
-                                seriesData.push([data.time[i], data.value[i]]);
-                            }
-                            
-                            const currentOption = myChart.getOption();
-                            const isInitial = !currentOption || !currentOption.series || currentOption.series.length === 0 || (currentOption.title && currentOption.title[0] && currentOption.title[0].text === 'New Chart');
-                            
-                            const newSeries = {
-                                name: paramName,
-                                type: 'line',
-                                showSymbol: false,
-                                sampling: 'lttb',
-                                data: seriesData
-                            };
-
-                            if (isInitial) {
-                                const option = {
-                                    title: { 
-                                        text: paramName, 
-                                        left: 'center', 
-                                        top: 5,
-                                        textStyle: { fontSize: 14, color: '#333' }
-                                    },
-                                    tooltip: { 
-                                        trigger: 'axis',
-                                        axisPointer: { type: 'cross' }
-                                    },
-                                    legend: { data: [paramName], top: 30 },
-                                    grid: { left: '5%', right: '5%', bottom: '10%', top: '20%', containLabel: true },
-                                    xAxis: { type: 'value', scale: true, splitLine: { show: false } },
-                                    yAxis: { type: 'value', scale: true },
-                                    series: [newSeries],
-                                    animation: false
-                                };
-                                myChart.setOption(option, true);
-                            } else {
-                                const existingSeries = currentOption.series;
-                                if (existingSeries.some(s => s.name === paramName)) return;
-                                
-                                let currentTitle = currentOption.title[0].text;
-                                if (currentTitle.length < 50) currentTitle += ' vs ' + paramName;
-                                else if (!currentTitle.includes('...')) currentTitle += '...';
-                                
-                                existingSeries.push(newSeries);
-                                const legendData = existingSeries.map(s => s.name);
-                                
-                                myChart.setOption({
-                                    title: { text: currentTitle },
-                                    legend: { data: legendData },
-                                    series: existingSeries
-                                }, false);
-                            }
-                        }
-                    } catch (err) {
-                        console.error('Error loading canvas chart data:', err);
-                    } finally {
-                        myChart.hideLoading();
-                    }
-                }
-            });
-
-            // Resize observer for auto resizing
-            new ResizeObserver(() => {
-                myChart.resize();
-            }).observe(chartContainer);
-        }
-    }, 50);
-}
-
-// Canvas Chart Settings Functions
-function openCanvasSettings(chartId) {
-    const chartDiv = document.getElementById(chartId);
-    if (!chartDiv) return;
-    
-    const chart = echarts.getInstanceByDom(chartDiv);
-    if (!chart) return;
-    
-    const opt = chart.getOption();
-    
-    // Set current values in modal
-    document.getElementById('canvas-setting-chart-id').value = chartId;
-    
-    // Zoom settings
-    // Hide Zoom settings in modal as they are now controlled by the header toggle
-    const zoomX = document.getElementById('canvas-zoom-x');
-    const zoomY = document.getElementById('canvas-zoom-y');
-    if (zoomX && zoomX.parentElement) zoomX.parentElement.style.display = 'none';
-    if (zoomY && zoomY.parentElement) zoomY.parentElement.style.display = 'none';
-    
-    // Legend settings
-    const legend = (Array.isArray(opt.legend) ? opt.legend[0] : opt.legend) || {};
-    document.getElementById('canvas-legend-show').checked = legend.show !== false;
-    document.getElementById('canvas-legend-scroll').checked = legend.type === 'scroll';
-    document.getElementById('canvas-legend-orient').value = legend.orient || 'horizontal';
-    
-    // Determine position and placement
-    // Simple heuristic: if grid has large margin, assume 'outside'
-    // But for simplicity, we just read the legend pos properties
-    let posMain = 'top';
-    let posAlign = 'center';
-    
-    if (legend.bottom !== undefined && legend.bottom !== 'auto') posMain = 'bottom';
-    else if (legend.left !== undefined && legend.left !== 'auto' && legend.orient === 'vertical') posMain = 'left';
-    else if (legend.right !== undefined && legend.right !== 'auto' && legend.orient === 'vertical') posMain = 'right';
-    
-    if (posMain === 'top' || posMain === 'bottom') {
-        if (legend.left === 'left') posAlign = 'start';
-        else if (legend.left === 'right') posAlign = 'end';
-        else posAlign = 'center';
-    } else {
-        if (legend.top === 'top') posAlign = 'start';
-        else if (legend.top === 'bottom') posAlign = 'end';
-        else posAlign = 'center';
-    }
-    
-    document.getElementById('canvas-legend-pos-main').value = posMain;
-    document.getElementById('canvas-legend-pos-align').value = posAlign;
-    
-    // Check grid to guess placement (inside/outside)
-    // This is a bit loose, but we default to 'inside' unless we stored metadata.
-    // For now, default to 'inside' in UI unless user changes it.
-    document.getElementById('canvas-legend-placement').value = 'inside'; 
-
-    document.getElementById('canvas-settings-modal').style.display = 'flex';
-}
-
-function applyCanvasSettings() {
-    const chartId = document.getElementById('canvas-setting-chart-id').value;
-    const chartDiv = document.getElementById(chartId);
-    if (!chartDiv) return;
-    const chart = echarts.getInstanceByDom(chartDiv);
-    if (!chart) return;
-
-    const showLegend = document.getElementById('canvas-legend-show').checked;
-    const scrollLegend = document.getElementById('canvas-legend-scroll').checked;
-    const orient = document.getElementById('canvas-legend-orient').value;
-    const placement = document.getElementById('canvas-legend-placement').value;
-    const posMain = document.getElementById('canvas-legend-pos-main').value;
-    const posAlign = document.getElementById('canvas-legend-pos-align').value;
-
-    // Construct Legend
-    const legend = {
-        show: showLegend,
-        type: scrollLegend ? 'scroll' : 'plain',
-        orient: orient,
-        left: 'auto', top: 'auto', right: 'auto', bottom: 'auto'
+    const host = widget.querySelector('.canvas-plot-host');
+    const plot = new uPlot(canvasPlotOptions(host), [
+        new Float64Array(0), new Float64Array(0),
+        new Float64Array(0), new Float64Array(0)
+    ], host);
+    const record = {
+        id: widgetId,
+        element: widget,
+        host,
+        plot,
+        parameters: [],
+        time: new Float64Array(0),
+        values: [],
+        initialScale: null,
+        resizeObserver: null
     };
+    canvasCharts.set(widgetId, record);
 
-    // Map position inputs to ECharts properties
-    if (posMain === 'top') { legend.top = 'top'; legend.left = posAlign === 'start' ? 'left' : (posAlign === 'end' ? 'right' : 'center'); }
-    else if (posMain === 'bottom') { legend.bottom = 'bottom'; legend.left = posAlign === 'start' ? 'left' : (posAlign === 'end' ? 'right' : 'center'); }
-    else if (posMain === 'left') { legend.left = 'left'; legend.top = posAlign === 'start' ? 'top' : (posAlign === 'end' ? 'bottom' : 'middle'); }
-    else if (posMain === 'right') { legend.right = 'right'; legend.top = posAlign === 'start' ? 'top' : (posAlign === 'end' ? 'bottom' : 'middle'); }
-
-    // Adjust Grid for 'Outside' placement
-    const grid = { containLabel: true, left: '3%', right: '4%', top: 60, bottom: '3%' }; // Reset to default-ish
-    if (placement === 'outside' && showLegend) {
-        if (posMain === 'top') grid.top = 80; // More space at top
-        else if (posMain === 'bottom') grid.bottom = 60;
-        else if (posMain === 'left') grid.left = 120;
-        else if (posMain === 'right') grid.right = 120;
-    }
-
-    chart.setOption({
-        legend: legend,
-        grid: grid
+    widget.addEventListener('click', event => {
+        if (!event.target.closest('button')) selectCanvasWidget(widgetId);
+    });
+    widget.addEventListener('dragover', event => {
+        event.preventDefault();
+        widget.classList.add('drag-over');
+    });
+    widget.addEventListener('dragleave', () => widget.classList.remove('drag-over'));
+    widget.addEventListener('drop', event => {
+        event.preventDefault();
+        widget.classList.remove('drag-over');
+        const parameter = event.dataTransfer.getData('text/plain');
+        const draggedWidget = event.dataTransfer.getData('application/x-wavelab-canvas-widget');
+        if (parameter) {
+            selectCanvasWidget(widgetId);
+            addParameterToCanvasWidget(widgetId, parameter);
+        } else if (draggedWidget && draggedWidget !== widgetId) {
+            const source = document.getElementById(draggedWidget);
+            if (source) canvasArea.insertBefore(source, widget);
+        }
     });
 
-    document.getElementById('canvas-settings-modal').style.display = 'none';
+    const header = widget.querySelector('.canvas-widget-header');
+    header.addEventListener('dragstart', event => {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('application/x-wavelab-canvas-widget', widgetId);
+        widget.classList.add('dragging');
+    });
+    header.addEventListener('dragend', () => {
+        widget.classList.remove('dragging');
+        document.querySelectorAll('.canvas-widget.drag-over').forEach(item => item.classList.remove('drag-over'));
+    });
+
+    widget.querySelector('.canvas-reset-btn').addEventListener('click', event => {
+        event.stopPropagation();
+        if (record.initialScale) record.plot.setScale('x', record.initialScale);
+        record.plot.setScale('y', { min: null, max: null });
+    });
+    widget.querySelector('.canvas-remove-btn').addEventListener('click', event => {
+        event.stopPropagation();
+        record.resizeObserver?.disconnect();
+        record.plot.destroy();
+        canvasCharts.delete(widgetId);
+        widget.remove();
+        if (selectedCanvasWidgetId === widgetId) selectedCanvasWidgetId = null;
+        if (canvasCharts.size === 0 && isCanvasMode) addCanvasChart();
+    });
+
+    if (typeof ResizeObserver !== 'undefined') {
+        record.resizeObserver = new ResizeObserver(() => resizeCanvasChart(record));
+        record.resizeObserver.observe(host);
+    }
+    selectCanvasWidget(widgetId);
+    resizeCanvasChart(record);
+}
+
+async function addParameterToCanvasWidget(widgetId, parameter) {
+    const record = canvasCharts.get(widgetId);
+    if (!record || record.parameters.includes(parameter)) return;
+    if (record.parameters.length >= 3) {
+        showNotification('A canvas chart supports up to three channels.', 'error');
+        return;
+    }
+
+    record.element.classList.add('loading');
+    try {
+        const nextParameters = record.parameters.concat(parameter);
+        const datasets = await Promise.all(nextParameters.map(name =>
+            fetchChartData(name, -Infinity, Infinity, 2000)));
+        const referenceTime = new Float64Array(datasets[0].time || []);
+        if (!referenceTime.length) throw new Error('No samples returned for ' + parameter);
+        const alignedValues = datasets.map(data =>
+            alignSeries(referenceTime, data.time || [], data.value || []));
+        const plotData = [referenceTime];
+        for (let index = 0; index < 3; index += 1) {
+            if (alignedValues[index]) {
+                plotData.push(alignedValues[index]);
+            } else {
+                const emptySeries = new Float64Array(referenceTime.length);
+                emptySeries.fill(NaN);
+                plotData.push(emptySeries);
+            }
+        }
+
+        record.parameters = nextParameters;
+        record.time = referenceTime;
+        record.values = alignedValues;
+        record.initialScale = {
+            min: Number(datasets[0].firstTimestamp ?? referenceTime[0]),
+            max: Number(datasets[0].lastTimestamp ?? referenceTime[referenceTime.length - 1])
+        };
+        record.plot.setData(plotData);
+        record.parameters.forEach((name, index) => {
+            record.plot.setSeries(index + 1, { label: name, show: true });
+        });
+        record.plot.setScale('x', record.initialScale);
+        record.plot.setScale('y', { min: null, max: null });
+
+        const title = record.element.querySelector('.canvas-widget-title');
+        const count = record.element.querySelector('.canvas-widget-count');
+        title.textContent = record.parameters.join(' · ');
+        title.title = record.parameters.join(' · ');
+        count.textContent = record.parameters.length + ' CH';
+    } catch (error) {
+        console.error('Canvas chart update failed:', error);
+        showNotification('Canvas chart error: ' + error.message, 'error');
+    } finally {
+        record.element.classList.remove('loading');
+    }
+}
+
+function resizeCanvasChart(record) {
+    if (!record?.plot || !record.host?.isConnected || record.host.clientWidth < 40 || record.host.clientHeight < 40) return;
+    const style = getComputedStyle(record.host);
+    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    record.plot.setSize({
+        width: Math.max(40, Math.floor(record.host.clientWidth - horizontalPadding)),
+        height: Math.max(40, Math.floor(record.host.clientHeight - verticalPadding))
+    });
+}
+
+function resizeCanvasCharts() {
+    requestAnimationFrame(() => canvasCharts.forEach(resizeCanvasChart));
 }
