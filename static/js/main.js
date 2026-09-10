@@ -1647,7 +1647,8 @@ async function getGlobalChartRange(referenceRange = null) {
         const response = await fetch('/api/global_time');
         const data = await response.json();
         if (response.ok) {
-            const range = validTimeRange(data.start, data.end);
+            const range = validTimeRange(data.data_start, data.data_end)
+                || validTimeRange(data.start, data.end);
             if (range && isCompatible(range)) {
                 globalChartRange = range;
                 return { ...range };
@@ -2914,7 +2915,10 @@ async function updateGlobalTimeInfo() {
         const resp = await fetch('/api/global_time');
         if (!resp.ok) throw new Error('Failed to fetch global time');
         const data = await resp.json();
-        globalChartRange = validTimeRange(data.start, data.end);
+        // Keep the chart cache in sample coordinates; start/end are
+        // retained as source-clock values for the header display.
+        globalChartRange = validTimeRange(data.data_start, data.data_end)
+            || validTimeRange(data.start, data.end);
         console.log('Fetched global time:', data); // 진단용 로그
         const startStr = formatGlobalTime(data.start);
         const endStr = formatGlobalTime(data.end);
