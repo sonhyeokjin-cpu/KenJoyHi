@@ -338,7 +338,12 @@ unitConvertBtn?.addEventListener('click', () => {
     populateUnitSelectors();
     const status = document.getElementById('unit-conversion-status');
     if (status && !selectedUnitParameter) {
-        status.textContent = '변환 대상 선택 버튼을 누른 뒤 왼쪽 채널을 클릭하세요.';
+        status.textContent = selectedChart
+            ? '차트가 선택되어 있습니다. 차트에 파라미터를 할당하려면 채널을 클릭하고, 변환하려면 대상 선택 버튼을 누르세요.'
+            : '왼쪽 채널 목록에서 변환할 파라미터를 클릭하세요.';
+        if (!selectedChart && selectedCharts.length === 0) {
+            document.getElementById('choose-unit-source')?.click();
+        }
     }
 });
 
