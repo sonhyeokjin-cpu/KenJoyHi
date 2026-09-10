@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='js/uPlot.min.css') }}">
     <script src="{{ url_for('static', filename='js/uPlot.iife.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/html2canvas.min.js') }}"></script>
-    <!-- Monaco is optional; Canvas mode uses the bundled uPlot renderer. -->
+    <!-- Monaco is optional; a plain-text editor fallback is always available. -->
     <script>
     // Dancing Script 폰트 로딩 보장
     if (window.FontFace) {
@@ -1182,15 +1182,16 @@
                 </div>
                 <div id="data-toolbar-group" class="toolbar-group">
                     <span class="toolbar-group-label">DATA</span>
-                    <label class="toolbar-select" title="Alignment used when channels have different sample clocks">
-                        <span>Align</span>
+                    <label class="toolbar-select" title="서로 다른 샘플 시간축을 가진 파라미터를 결합할 때 사용할 정렬 방식">
+                        <span>시간축 정렬</span>
                         <select id="alignment-policy">
-                            <option value="linear">Linear</option>
-                            <option value="nearest">Nearest</option>
-                            <option value="hold-last">Hold last</option>
+                            <option value="linear">선형 보간</option>
+                            <option value="nearest">가장 가까운 값</option>
+                            <option value="hold-last">이전 값 유지</option>
                         </select>
                     </label>
                     <button id="quality-btn" class="btn">Data Quality</button>
+                    <button id="unit-convert-btn" class="btn disabled" disabled>단위환산</button>
                 </div>
             </div>
 
@@ -1199,9 +1200,6 @@
                 <!-- Charts will be added here -->
             </div>
             
-            <!-- Native resizable Canvas workspace -->
-            <div id="canvas-area" style="display: none;"></div>
-
             <!-- File Tab Notepad Area -->
             <div class="notepad-area" id="notepad-area" style="display: none;">
                 <div class="notepad-split">
@@ -1240,6 +1238,7 @@
                 <button class="inspector-tab active" type="button" data-inspector-tab="scale" role="tab" aria-selected="true">Scale</button>
                 <button class="inspector-tab" type="button" data-inspector-tab="minmax" role="tab" aria-selected="false">Min/Max</button>
                 <button class="inspector-tab" type="button" data-inspector-tab="filter" role="tab" aria-selected="false">Filter</button>
+                <button class="inspector-tab" type="button" data-inspector-tab="unit" role="tab" aria-selected="false">단위환산</button>
             </div>
             <div class="inspector-body">
                 <section id="inspector-scale-panel" class="inspector-panel active" data-inspector-panel="scale">
@@ -1302,6 +1301,37 @@
                         <div class="inspector-section-heading"><h3>Filter response</h3><span>RESULT</span></div>
                         <div id="filter-info-text" class="filter-info-text"></div>
                         <div id="magnitude-chart" class="magnitude-chart"></div>
+                    </div>
+                </section>
+
+                <section id="inspector-unit-panel" class="inspector-panel" data-inspector-panel="unit">
+                    <div class="inspector-section-heading">
+                        <h3>파라미터 단위환산</h3>
+                        <span>NEW PARAMETER</span>
+                    </div>
+                    <div class="inspector-note">왼쪽 채널 목록에서 변환할 파라미터를 클릭하세요. 원본 데이터는 변경되지 않고 새 파라미터가 생성됩니다.</div>
+                    <div id="unit-source-parameter" class="unit-source-parameter empty">선택된 파라미터 없음</div>
+                    <div class="inspector-fields">
+                        <label>물리량
+                            <select id="unit-quantity-type">
+                                <option value="length">길이</option>
+                                <option value="speed">속도</option>
+                                <option value="temperature">온도</option>
+                                <option value="pressure">압력</option>
+                                <option value="mass">무게</option>
+                            </select>
+                        </label>
+                        <div class="unit-direction-grid">
+                            <label>현재 단위<select id="unit-source-unit"></select></label>
+                            <span aria-hidden="true">→</span>
+                            <label>변환 단위<select id="unit-target-unit"></select></label>
+                        </div>
+                        <label>새 파라미터 이름<input type="text" id="unit-parameter-name" placeholder="파라미터를 먼저 선택하세요"></label>
+                    </div>
+                    <div id="unit-conversion-status" class="unit-conversion-status" aria-live="polite"></div>
+                    <div class="inspector-note">Mach 변환은 표준 대기 해면·15℃에서 Mach 1 = 340.29 m/s를 사용합니다.</div>
+                    <div class="inspector-actions">
+                        <button id="apply-unit-conversion" class="btn primary" type="button" disabled>변환</button>
                     </div>
                 </section>
             </div>
@@ -1598,21 +1628,21 @@
         <div class="resize-handle"></div>
         <div class="derived-panel-header">
             <div class="derived-panel-title">
-                Derived Parameter
-                <button class="help-button" id="derived-help-btn">?</button>
+                파생 파라미터 생성
+                <button class="help-button" id="derived-help-btn" title="작성 도움말" aria-label="파생 파라미터 작성 도움말">?</button>
             </div>
             <button class="close-btn">&times;</button>
         </div>
         <div class="derived-panel-content">
             <div class="parameter-name-input">
-                <input type="text" id="parameter-name" placeholder="Enter parameter name">
+                <input type="text" id="parameter-name" placeholder="새 파라미터 이름">
             </div>
             <div id="monaco-editor" class="monaco-editor-container"></div>
         </div>
         <div class="derived-panel-footer">
-            <button id="save-code" class="btn secondary">Save Code</button>
-            <button id="load-code" class="btn secondary">Load Code</button>
-            <button id="generate-parameter" class="btn primary">Generate</button>
+            <button id="save-code" class="btn secondary">코드 저장</button>
+            <button id="load-code" class="btn secondary">코드 불러오기</button>
+            <button id="generate-parameter" class="btn primary">생성</button>
             <input type="file" id="code-file-input" accept=".py" style="display: none;">
         </div>
     </div>
@@ -1621,11 +1651,11 @@
     <div id="help-modal" class="help-modal">
         <div class="help-modal-content">
             <div class="help-modal-header">
-                <h2 class="help-modal-title">Derived Parameter Functions Reference</h2>
-                <button class="help-modal-close">&times;</button>
+                <h2 class="help-modal-title">파생 파라미터 작성 도움말</h2>
+                <button class="help-modal-close" aria-label="도움말 닫기">&times;</button>
             </div>
             <div id="help-content">
-                <!-- Content will be dynamically populated -->
+                <!-- 도움말 내용은 동적으로 생성됩니다. -->
             </div>
         </div>
     </div>
@@ -1637,7 +1667,7 @@
             const container = document.getElementById('monaco-editor');
             const textarea = document.createElement('textarea');
             textarea.className = 'code-editor-fallback';
-            textarea.value = '# Enter your Python code here\n# Assign the result to the "result" variable\n\nresult = None';
+            textarea.value = '# Python 계산식을 입력하세요.\n# 계산 결과는 반드시 result 변수에 대입하세요.\n\nresult = None';
             container.replaceChildren(textarea);
             window.monacoEditor = {
                 getValue: () => textarea.value,
@@ -1651,7 +1681,7 @@
             });
             require(['vs/editor/editor.main'], function() {
             const editor = monaco.editor.create(document.getElementById('monaco-editor'), {
-                value: '# Enter your Python code here\n# Use available parameters and functions\n# Assign the result to the "result" variable\n\nresult = None',
+                value: '# Python 계산식을 입력하세요.\n# 왼쪽 목록에서 사용할 파라미터를 클릭하세요.\n# 계산 결과는 반드시 result 변수에 대입하세요.\n\nresult = None',
                 language: 'python',
                 theme: 'vs',
                 automaticLayout: true,
@@ -2003,66 +2033,72 @@
 
             // Generate help content
             function generateHelpContent() {
-                let content = '';
-                // Add new section for global module access and user-defined functions
-                content += `
+                const categoryNames = {
+                    'Basic Operators': '기본 연산자',
+                    'Bitwise Operators': '비트 연산자',
+                    'Comparison Operators': '비교 연산자',
+                    'Mathematical Functions': '수학 함수',
+                    'Bitwise Operations': '비트 처리 함수',
+                    'Signal Processing': '신호 처리',
+                    'Binary Operations': '바이너리 데이터 처리',
+                    'Statistical Functions': '통계 함수',
+                    'Array Operations': '배열 연산',
+                    'Logical Operations': '논리 연산',
+                    'Number System Conversions': '진법 변환',
+                    'Advanced Signal Processing': '고급 신호 처리',
+                    'Time Series Operations': '시계열 연산'
+                };
+                let content = `
+                    <div class="function-category derived-help-intro">
+                        <h3 class="category-title">처음 사용하는 방법</h3>
+                        <ol>
+                            <li>상단에 새 파라미터 이름을 입력합니다.</li>
+                            <li>왼쪽 채널 목록에서 사용할 파라미터를 클릭하면 편집기에 이름이 삽입됩니다.</li>
+                            <li>Python 문법으로 계산식을 작성하고 결과를 반드시 <code>result</code> 변수에 대입합니다.</li>
+                            <li><strong>생성</strong> 버튼을 누르면 첫 번째 입력 파라미터의 시간축을 기준으로 새 파라미터가 생성됩니다.</li>
+                        </ol>
+                        <div class="derived-help-warning"><strong>필수:</strong> 결과는 입력 파라미터와 길이가 같은 1차원 숫자 배열이어야 합니다.</div>
+                    </div>
                     <div class="function-category">
-                        <h3 class="category-title">Global Modules & User Functions</h3>
-                        <p>
-                            <b>All functions from <code>numpy</code> (<code>np</code>), <code>pandas</code> (<code>pd</code>), <code>scipy.signal</code> (<code>signal</code>), <code>scipy.fft</code> (<code>fft</code>) are available.</b><br>
-                            You can use any function as <code>np.function(...)</code>, <code>pd.function(...)</code>, <code>signal.function(...)</code>, <code>fft.function(...)</code>.<br>
-                            <b>You can also define your own functions using <code>def myfunc(...):</code> syntax.</b>
-                        </p>
+                        <h3 class="category-title">자주 쓰는 작성 예</h3>
                         <table class="function-table">
-                            <thead>
-                                <tr><th>Usage</th><th>Description</th></tr>
-                            </thead>
+                            <thead><tr><th>목적</th><th>코드 예시</th></tr></thead>
                             <tbody>
-                                <tr><td><code>np.mean(x)</code></td><td>Use any numpy function</td></tr>
-                                <tr><td><code>pd.Series(x).rolling(5).mean()</code></td><td>Use any pandas function or method</td></tr>
-                                <tr><td><code>signal.butter(4, 0.2)</code></td><td>Use any scipy.signal function</td></tr>
-                                <tr><td><code>fft.fft(x)</code></td><td>Use any scipy.fft function</td></tr>
-                                <tr><td><code>def myfunc(x):\n    return x**2\nresult = myfunc(x)</code></td><td>Define and use your own function</td></tr>
+                                <tr><td>배율과 오프셋 적용</td><td><code>result = PARAM_A * 1.8 + 32</code></td></tr>
+                                <tr><td>두 파라미터 평균</td><td><code>result = (PARAM_A + PARAM_B) / 2</code></td></tr>
+                                <tr><td>범위 제한</td><td><code>result = np.clip(PARAM_A, -10, 10)</code></td></tr>
+                                <tr><td>조건에 따른 값 선택</td><td><code>result = np.where(PARAM_A &gt; 0, PARAM_A, 0)</code></td></tr>
+                                <tr><td>이동 평균</td><td><code>result = moving_average(PARAM_A, 20)</code></td></tr>
+                                <tr><td>사용자 함수</td><td><code>def convert(x):\n    return x * 2\nresult = convert(PARAM_A)</code></td></tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div class="function-category">
+                        <h3 class="category-title">사용 가능한 모듈</h3>
+                        <p><code>numpy</code>는 <code>np</code>, <code>pandas</code>는 <code>pd</code>, <code>scipy.signal</code>은 <code>signal</code>, <code>scipy.fft</code>는 <code>fft</code> 이름으로 사용할 수 있습니다. 파일 열기, import, eval/exec, 비동기 문법은 안전을 위해 허용되지 않습니다.</p>
                     </div>
                 `;
                 for (const [category, info] of Object.entries(functionCategories)) {
                     content += `
                         <div class="function-category">
-                            <h3 class="category-title">${category}</h3>
-                            <p>${info.description}</p>
+                            <h3 class="category-title">${categoryNames[category] || category}</h3>
+                            <p>아래 함수명을 계산식에 그대로 사용할 수 있습니다.</p>
                             <table class="function-table">
-                                <thead>
-                                    <tr>
-                                        <th>Function</th>
-                                        <th>Description</th>
-                                        <th>Example</th>
-                                    </tr>
-                                </thead>
+                                <thead><tr><th>함수</th><th>사용 예</th></tr></thead>
                                 <tbody>
                     `;
-                    
                     for (const [funcName, funcInfo] of Object.entries(info.functions)) {
                         content += `
                             <tr>
                                 <td><span class="function-name">${funcName}</span></td>
-                                <td class="function-description">${funcInfo.description}</td>
                                 <td><code class="function-example">${funcInfo.example}</code></td>
                             </tr>
                         `;
                     }
-                    
-                    content += `
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
+                    content += '</tbody></table></div>';
                 }
-                
                 helpContent.innerHTML = content;
             }
-
             // Show help modal
             helpBtn.addEventListener('click', function() {
                 generateHelpContent();
