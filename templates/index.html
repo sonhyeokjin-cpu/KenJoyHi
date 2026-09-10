@@ -522,7 +522,7 @@
             white-space: pre-wrap;
         }
         
-        /* PCAP Export Styles */
+        /* Parameter Selection Styles */
         .parameter-selection-list {
             max-height: 300px;
             overflow-y: auto;
@@ -624,22 +624,6 @@
             width: 16px;
             height: 16px;
             cursor: pointer;
-        }
-        
-        .pcap-export-form input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
-            background-color: white;
-            transition: border-color 0.2s;
-        }
-        
-        .pcap-export-form input[type="text"]:focus {
-            outline: none;
-            border-color: #2196F3;
-            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
         }
         
         .form-actions {
@@ -1101,31 +1085,49 @@
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
+            <div class="sidebar-brand" aria-label="WaveLab flight data workspace">
+                <div class="brand-mark" aria-hidden="true">WL</div>
+                <div class="brand-copy">
+                    <strong>WaveLab</strong>
+                    <span>FLIGHT DATA WORKSPACE</span>
+                </div>
+            </div>
             <div class="sidebar-tabs">
                 <div class="tab active" data-tab="file">
-                    <span class="icon">📂</span> File
+                    <span class="icon" aria-hidden="true">▣</span> Project
                 </div>
                 <div class="tab" data-tab="plot">
-                    Plot
+                    <span class="icon" aria-hidden="true">⌁</span> Channels
                 </div>
             </div>
             
             <div class="tab-content">
                 <!-- File Tab -->
                 <div class="tab-pane active" id="file-tab">
+                    <div class="sidebar-section-label">DATA SOURCE</div>
                     <div class="upload-container">
                         <input type="file" id="file-input" accept=".mat,.matlab,.csv,.db" style="display: none;">
-                        <button id="upload-btn" class="btn">Upload file :<br><small>.csv, .mat, .db</small></button>
-                        <button id="upload-fixed-wing-btn" class="btn">Upload file (Fixed-wing)</button>
+                        <button id="upload-btn" class="btn"><span aria-hidden="true">＋</span><span>Open data file<br><small>CSV · MAT · DB</small></span></button>
+                        <button id="upload-fixed-wing-btn" class="btn"><span aria-hidden="true">＋</span><span>Open fixed-wing data</span></button>
                         <div id="current-file"></div>
                         <div id="upload-status"></div>
-                        <button id="save-db-btn" class="btn">Save Database</button>
-                        <button id="config-btn" class="btn">Configuration</button>
+                        <div class="sidebar-section-label">WORKSPACE</div>
+                        <button id="save-db-btn" class="btn"><span aria-hidden="true">↓</span><span>Save database</span></button>
+                        <button id="config-btn" class="btn"><span aria-hidden="true">⚙</span><span>Configuration</span></button>
                     </div>
                 </div>
                 
                 <!-- Plot Tab -->
                 <div class="tab-pane" id="plot-tab">
+                    <div class="parameter-search" role="search">
+                        <span class="search-icon" aria-hidden="true">⌕</span>
+                        <input id="parameter-search-input" type="search" placeholder="Search channel or description" autocomplete="off" aria-label="Search channels">
+                        <button id="clear-parameter-search" type="button" aria-label="Clear channel search">×</button>
+                    </div>
+                    <div class="parameter-list-meta">
+                        <span>AVAILABLE CHANNELS</span>
+                        <span id="parameter-result-count">0</span>
+                    </div>
                     <!-- Toggle Controls -->
                     <div class="toggle-controls">
                         <div class="toggle-item">
@@ -1157,33 +1159,51 @@
 
         <!-- Main Content -->
         <div class="main-content">
+            <div class="instrument-statusbar" aria-label="Dataset status">
+                <div class="status-cluster">
+                    <span id="data-state-indicator" class="status-indicator idle" aria-hidden="true"></span>
+                    <span id="status-file-name" class="status-file">NO DATASET</span>
+                </div>
+                <div class="status-divider"></div>
+                <span id="status-channel-count" class="status-metric">0 CH</span>
+                <span class="status-metric">TIME BASE <strong>UTC / DDD</strong></span>
+                <span id="job-status" class="job-status" aria-live="polite">READY</span>
+                <span id="global-time-info" class="global-time-info">GLOBAL TIME · --</span>
+            </div>
             <!-- Top Toolbar -->
-            <div class="toolbar">
-                <button id="addChartBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">1</span>Add Chart</button>
-                <button id="scaleBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">2</span>Scale</button>
-                <button id="minMaxBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">3</span>Min/Max</button>
-                <button id="fft-btn" class="btn" title="FFT Analysis (Alt+4)"><span class="shortcut-badge" style="display:none;">4</span>FFT</button>
-                <button id="scatter-btn" class="btn disabled" disabled title="Scatter Plot (Alt+5)"><span class="shortcut-badge" style="display:none;">5</span>Scatter</button>
-                <div class="filter-dropdown">
-                    <button id="filter-btn" class="btn disabled" disabled>Filter</button>
-                    <div class="dropdown-content">
-                        <a href="#" data-filter="lpf">Low-pass Filter (LPF)</a>
-                        <a href="#" data-filter="bpf">Band-pass Filter (BPF)</a>
-                        <a href="#" data-filter="ma">Moving Average</a>
-                        <a href="#" data-filter="rms">RMS</a>
+            <div class="toolbar" aria-label="Analysis commands">
+                <div id="view-toolbar-group" class="toolbar-group">
+                    <span class="toolbar-group-label">VIEW</span>
+                    <button id="addChartBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">1</span>Add Chart</button>
+                    <button id="scaleBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">2</span>Scale</button>
+                </div>
+                <div id="analysis-toolbar-group" class="toolbar-group">
+                    <span class="toolbar-group-label">ANALYSIS</span>
+                    <button id="minMaxBtn" class="btn btn-primary"><span class="shortcut-badge" style="display:none;">3</span>Min/Max</button>
+                    <button id="fft-btn" class="btn" title="FFT Analysis (Alt+4)"><span class="shortcut-badge" style="display:none;">4</span>FFT</button>
+                    <button id="scatter-btn" class="btn disabled" disabled title="Scatter Plot (Alt+5)"><span class="shortcut-badge" style="display:none;">5</span>Scatter</button>
+                    <div class="filter-dropdown">
+                        <button id="filter-btn" class="btn disabled" disabled>Filter</button>
+                        <div class="dropdown-content">
+                            <a href="#" data-filter="lpf">Low-pass Filter (LPF)</a>
+                            <a href="#" data-filter="bpf">Band-pass Filter (BPF)</a>
+                            <a href="#" data-filter="ma">Moving Average</a>
+                            <a href="#" data-filter="rms">RMS</a>
+                        </div>
                     </div>
                 </div>
-                <label class="toolbar-select" title="Alignment used when channels have different sample clocks">
-                    Align
-                    <select id="alignment-policy">
-                        <option value="linear">Linear</option>
-                        <option value="nearest">Nearest</option>
-                        <option value="hold-last">Hold last</option>
-                    </select>
-                </label>
-                <button id="quality-btn" class="btn">Data Quality</button>
-                <span id="job-status" class="job-status" aria-live="polite"></span>
-                <span id="global-time-info" style="margin-left:auto; font-weight:600; color:#1976D2; font-size:1.05rem;"></span>
+                <div id="data-toolbar-group" class="toolbar-group">
+                    <span class="toolbar-group-label">DATA</span>
+                    <label class="toolbar-select" title="Alignment used when channels have different sample clocks">
+                        <span>Align</span>
+                        <select id="alignment-policy">
+                            <option value="linear">Linear</option>
+                            <option value="nearest">Nearest</option>
+                            <option value="hold-last">Hold last</option>
+                        </select>
+                    </label>
+                    <button id="quality-btn" class="btn">Data Quality</button>
+                </div>
             </div>
 
             <!-- Plot Area -->
@@ -1453,46 +1473,6 @@
         </div>
     </div>
     <!-- End Scale Dialog -->
-
-    <!-- PCAP Export Popup -->
-    <div id="pcap-export-popup" class="popup" style="display: none;">
-        <div class="popup-content">
-            <div class="popup-header">
-                <h3>Export as .pcap</h3>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div class="pcap-export-form">
-                <div class="form-group">
-                    <label>Select Parameters (Multiple selection available):</label>
-                    <div id="parameter-selection-list" class="parameter-selection-list">
-                        <!-- Select All checkbox will be added here -->
-                        <!-- Parameters will be populated here -->
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Data Format:</label>
-                    <div class="format-selection">
-                        <label class="radio-label">
-                            <input type="radio" name="data-format" value="32bit" checked>
-                            32-bit Format
-                        </label>
-                        <label class="radio-label">
-                            <input type="radio" name="data-format" value="16bit">
-                            16-bit Format
-                        </label>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>File Name:</label>
-                    <input type="text" id="pcap-filename" placeholder="Enter file name (without extension)" value="exported_data">
-                </div>
-                <div class="form-actions">
-                    <button id="cancel-pcap-btn" class="btn secondary">Cancel</button>
-                    <button id="export-pcap-btn" class="btn primary">Export as .pcap</button>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- BIT Extractor Popup -->
     <div id="bit-extractor-popup" class="popup" style="display: none;">
