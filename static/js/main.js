@@ -1768,10 +1768,34 @@ function sliceDataset(data, range) {
     };
 }
 
+function commonInteriorRange(datasets) {
+    const ranges = datasets.map(datasetRange).filter(Boolean);
+    if (ranges.length < 2) return null;
+    const min = Math.max(...ranges.map(item => item.min));
+    const max = Math.min(...ranges.map(item => item.max));
+    return min < max ? { min, max } : null;
+}
+
 function renderChartData(chart, parameterList, datasets, range = null) {
     const normalizedDatasets = datasets.map(normalizeTimeSeries);
-    const timeData = buildSharedTimeAxis(normalizedDatasets);
-    const valueData = normalizedDatasets.map(data => alignSeries(timeData, data.time, data.value));
+    const requestedRange = validTimeRange(range?.min, range?.max);
+    const sourceTimeData = buildSharedTimeAxis(normalizedDatasets);
+    const sourceRange = datasetRange({ time: sourceTimeData });
+
+    // On a full-range reset, remove only the non-overlapping leading/trailing
+    // portions from the rendered view. The raw per-channel cache remains intact,
+    // so a user-selected partial range can still show those endpoint samples.
+    const isFullRange = Boolean(requestedRange && chart.initialScale &&
+        sameRange(requestedRange, chart.initialScale));
+    const interiorRange = parameterList.length > 1 && isFullRange
+        ? commonInteriorRange(normalizedDatasets)
+        : null;
+    const renderDatasets = interiorRange
+        ? normalizedDatasets.map(data => sliceDataset(data, interiorRange))
+        : normalizedDatasets;
+
+    const timeData = buildSharedTimeAxis(renderDatasets);
+    const valueData = renderDatasets.map(data => alignSeries(timeData, data.time, data.value));
     const plotData = [timeData];
 
     // uPlot requires every series array to have the same length as X.
@@ -1786,7 +1810,6 @@ function renderChartData(chart, parameterList, datasets, range = null) {
 
     chart.data = { time: timeData, values: valueData };
     const actualRange = datasetRange({ time: timeData });
-    const requestedRange = validTimeRange(range?.min, range?.max);
     const hasOverlap = actualRange && requestedRange &&
         actualRange.max >= requestedRange.min && actualRange.min <= requestedRange.max;
     const displayRange = requestedRange && (hasOverlap || !actualRange)
