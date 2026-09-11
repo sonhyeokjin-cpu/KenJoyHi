@@ -1737,10 +1737,13 @@ function datasetRange(data, fallback = null) {
 }
 
 function sliceDataset(data, range) {
-    if (!data?.time?.length || !range) return data || { time: [], value: [] };
+    const normalizedData = data?._normalizedTimeSeries
+        ? data
+        : normalizeTimeSeries(data);
+    if (!normalizedData?.time?.length || !range) return normalizedData || { time: [], value: [] };
     const min = Number(range.min);
     const max = Number(range.max);
-    const time = data.time;
+    const time = normalizedData.time;
     let lo = 0;
     let hi = time.length;
     while (lo < hi) {
@@ -1758,9 +1761,10 @@ function sliceDataset(data, range) {
     }
     const endIndex = lo;
     return {
-        ...data,
+        ...normalizedData,
         time: time.slice(startIndex, endIndex),
-        value: (data.value || []).slice(startIndex, endIndex)
+        value: (normalizedData.value || []).slice(startIndex, endIndex),
+        _normalizedTimeSeries: true
     };
 }
 
@@ -1781,7 +1785,14 @@ function renderChartData(chart, parameterList, datasets, range = null) {
     }
 
     chart.data = { time: timeData, values: valueData };
-    chart.dataRange = datasetRange({ time: timeData }, range);
+    const actualRange = datasetRange({ time: timeData });
+    const requestedRange = validTimeRange(range?.min, range?.max);
+    const hasOverlap = actualRange && requestedRange &&
+        actualRange.max >= requestedRange.min && actualRange.min <= requestedRange.max;
+    const displayRange = requestedRange && (hasOverlap || !actualRange)
+        ? requestedRange
+        : actualRange;
+    chart.dataRange = actualRange || displayRange;
     chart.renderedParameters = parameterList.slice();
     chart.suppressRangeReload = true;
     try {
@@ -1799,10 +1810,10 @@ function renderChartData(chart, parameterList, datasets, range = null) {
     } finally {
         chart.suppressRangeReload = false;
     }
-    if (range) {
-        chart.loadedRange = { ...range };
-        chart.viewRange = { ...range };
-        setChartXRange(chart, range);
+    if (displayRange) {
+        chart.loadedRange = { ...displayRange };
+        chart.viewRange = { ...displayRange };
+        setChartXRange(chart, displayRange);
     }
 }
 
@@ -1887,9 +1898,12 @@ async function updateChartData(chartId, parameters, start, end) {
 
     if (cacheCoversRange) {
         chart.isUpdating = false;
-        const datasets = parameterList.map(parameter =>
+        let datasets = parameterList.map(parameter =>
             sliceDataset(chart.rawDataByParameter.get(parameter).data, requestedRange)
         );
+        if (datasets.every(data => !data.time?.length)) {
+            datasets = parameterList.map(parameter => chart.rawDataByParameter.get(parameter).data);
+        }
         renderChartData(chart, parameterList, datasets, requestedRange);
         updateChartTitle(chart);
         return;
@@ -1910,7 +1924,7 @@ async function updateChartData(chartId, parameters, start, end) {
             if (requestedRange && cached && rangeContains(cached.loadedRange, requestedRange)) {
                 return sliceDataset(cached.data, requestedRange);
             }
-            const fetched = await fetchChartData(parameter, fetchStart, fetchEnd);
+            const fetched = normalizeTimeSeries(await fetchChartData(parameter, fetchStart, fetchEnd));
             const fallbackRange = requestedRange || datasetRange(fetched);
             chart.rawDataByParameter.set(parameter, {
                 data: fetched,
@@ -1957,7 +1971,7 @@ async function updateChart(chartId, parameter) {
             chart.initialScale = initialScale;
             chart.lastZoom = initialScale;
             chart.rawDataByParameter.set(parameter, {
-                data,
+                data: normalizeTimeSeries(data),
                 loadedRange: initialScale
             });
 
@@ -2015,7 +2029,7 @@ function normalizeTimeSeries(data) {
             value.push(row.value);
         }
     }
-    return { ...data, time, value };
+    return { ...data, time, value, _normalizedTimeSeries: true };
 }
 
 function buildSharedTimeAxis(datasets) {
