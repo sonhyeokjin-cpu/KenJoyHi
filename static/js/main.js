@@ -803,61 +803,82 @@ function updateGridLayout() {
     else if (chartCount <= 20) { cols = 4; rows = 5; }
     else { cols = 5; rows = 5; }
 
-    const gap = parseFloat(getComputedStyle(plotArea).gap) || 5;
-    const plotAreaStyle = getComputedStyle(plotArea);
-    const paddingLeft = parseFloat(plotAreaStyle.paddingLeft);
-    const paddingRight = parseFloat(plotAreaStyle.paddingRight);
-    const paddingTop = parseFloat(plotAreaStyle.paddingTop);
-    const paddingBottom = parseFloat(plotAreaStyle.paddingBottom);
-    const totalPadding = paddingLeft + paddingRight;
-
-    // clientWidth/clientHeight already exclude scrollbars. Subtract only the
-    // CSS padding so the grid never grows underneath a scrollbar.
-    const plotAreaWidth = Math.max(0, plotArea.clientWidth - totalPadding);
-    const plotAreaHeight = Math.max(0, plotArea.clientHeight - paddingTop - paddingBottom);
-    const chartWidth = Math.max(0, Math.floor((plotAreaWidth - gap * (cols - 1)) / cols));
-    const chartHeight = Math.max(0, Math.floor((plotAreaHeight - gap * (rows - 1)) / rows));
+    const areaStyle = getComputedStyle(plotArea);
+    const gap = Number.parseFloat(areaStyle.gap) || 5;
+    const paddingLeft = Number.parseFloat(areaStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(areaStyle.paddingRight) || 0;
+    const paddingTop = Number.parseFloat(areaStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(areaStyle.paddingBottom) || 0;
+    const contentWidth = Math.max(1, plotArea.clientWidth - paddingLeft - paddingRight);
+    const contentHeight = Math.max(1, plotArea.clientHeight - paddingTop - paddingBottom);
+    const chartWidth = Math.max(1, Math.floor((contentWidth - gap * (cols - 1)) / cols));
+    const chartHeight = Math.max(1, Math.floor((contentHeight - gap * (rows - 1)) / rows));
 
     plotArea.style.gridTemplateColumns = Array(cols).fill(`${chartWidth}px`).join(' ');
     plotArea.style.gridTemplateRows = Array(rows).fill(`${chartHeight}px`).join(' ');
     plotArea.style.gap = `${gap}px`;
 
-    charts.forEach((chart, idx) => {
-        const container = document.getElementById(chart.id);
-        if (container) {
+    const resizePlots = () => {
+        charts.forEach((chart, idx) => {
+            const container = document.getElementById(chart.id);
+            if (!container) return;
+
             container.style.width = `${chartWidth}px`;
             container.style.height = `${chartHeight}px`;
             container.style.order = idx;
 
-            // padding 고려
-            const style = getComputedStyle(container);
-            const paddingLeft = parseFloat(style.paddingLeft);
-            const paddingRight = parseFloat(style.paddingRight);
-            const paddingTop = parseFloat(style.paddingTop);
-            const paddingBottom = parseFloat(style.paddingBottom);
-            const plotWidth = chartWidth - paddingLeft - paddingRight;
-            const plotHeight = chartHeight - paddingTop - paddingBottom;
+            const containerStyle = getComputedStyle(container);
+            const borderLeft = Number.parseFloat(containerStyle.borderLeftWidth) || 0;
+            const borderRight = Number.parseFloat(containerStyle.borderRightWidth) || 0;
+            const borderTop = Number.parseFloat(containerStyle.borderTopWidth) || 0;
+            const borderBottom = Number.parseFloat(containerStyle.borderBottomWidth) || 0;
+            const containerWidth = Math.max(1, container.clientWidth - borderLeft - borderRight);
+            const containerHeight = Math.max(1, container.clientHeight - borderTop - borderBottom);
+            const header = container.querySelector('.chart-header');
+            const headerHeight = header
+                ? Math.ceil(header.getBoundingClientRect().height)
+                : 0;
             const plotElement = container.querySelector('.chart-plot');
-            if (plotElement) {
-                plotElement.style.width = `${Math.max(0, plotWidth)}px`;
-                plotElement.style.height = `${Math.max(0, plotHeight)}px`;
-            }
+            if (!plotElement) return;
+
+            // The header is a real grid row, so the plot gets a definite
+            // pixel height instead of relying on percentage flex sizing.
+            const plotWidth = Math.max(1, Math.floor(containerWidth));
+            const plotHeight = Math.max(1, Math.floor(containerHeight - headerHeight));
+            plotElement.style.width = `${plotWidth}px`;
+            plotElement.style.height = `${plotHeight}px`;
 
             if (chart.plot) {
-                // uPlot's legend is rendered below the plotting wrap. Keep
-                // that row inside the tile instead of sizing only the canvas.
-                const legendHeight = plotElement?.querySelector('.u-legend')
-                    ? Math.ceil(plotElement.querySelector('.u-legend').getBoundingClientRect().height)
+                const legend = plotElement.querySelector('.u-legend');
+                const legendHeight = legend
+                    ? Math.ceil(legend.getBoundingClientRect().height)
                     : 0;
+                const measuredWidth = Math.max(1, plotElement.clientWidth || plotWidth);
+                const measuredHeight = Math.max(1, plotElement.clientHeight || plotHeight);
                 chart.plot.setSize({
-                    width: Math.max(0, plotWidth),
-                    height: Math.max(0, plotHeight - legendHeight)
+                    width: measuredWidth,
+                    height: Math.max(1, measuredHeight - legendHeight)
                 });
             }
-        }
-    });
-}
+        });
+    };
 
+    const firstViewport = { width: plotArea.clientWidth, height: plotArea.clientHeight };
+    resizePlots();
+    // Grid track sizes settle on the next frame after changing the inline
+    // dimensions. Re-run the full grid calculation if the viewport was
+    // initially measured while the tab was still being laid out.
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+            if (plotArea.clientWidth !== firstViewport.width ||
+                    plotArea.clientHeight !== firstViewport.height) {
+                updateGridLayout();
+            } else {
+                resizePlots();
+            }
+        });
+    }
+}
 function resetPlotArea() {
     // Destroy existing charts and clear the array
     if (charts && charts.length > 0) {
@@ -1760,6 +1781,29 @@ async function updateChartData(chartId, parameters, start, end) {
             }
 
             chart.plot.setData(plotData);
+
+            // setData() preserves prior visibility state. Explicitly restore
+            // every assigned channel so adding channel 2/3 cannot leave the
+            // new series hidden after a previous fixed-scale or limit-line
+            // operation.
+            for (let seriesIndex = 1; seriesIndex <= 3; seriesIndex++) {
+                const assigned = seriesIndex <= parameters.length &&
+                    valueData[seriesIndex - 1] &&
+                    valueData[seriesIndex - 1].length > 0;
+                if (typeof chart.plot.setSeries === 'function') {
+                    chart.plot.setSeries(seriesIndex, { show: assigned });
+                } else if (chart.plot.series?.[seriesIndex]) {
+                    chart.plot.series[seriesIndex].show = assigned;
+                }
+            }
+
+            // Let uPlot recompute the data-driven Y range whenever fixed
+            // limits are not enabled. This is important after a second
+            // parameter changes the shared time axis.
+            if (!isFixedScale) {
+                chart.plot.setScale('y', { min: null, max: null });
+            }
+
             chart.loadedRange = { min: Number(startParam), max: Number(endParam) };
 
             if (isFixedScale && parameters.length >= 1) {
