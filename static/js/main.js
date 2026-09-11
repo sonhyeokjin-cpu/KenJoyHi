@@ -1765,8 +1765,9 @@ function sliceDataset(data, range) {
 }
 
 function renderChartData(chart, parameterList, datasets, range = null) {
-    const timeData = buildSharedTimeAxis(datasets);
-    const valueData = datasets.map(data => alignSeries(timeData, data.time, data.value));
+    const normalizedDatasets = datasets.map(normalizeTimeSeries);
+    const timeData = buildSharedTimeAxis(normalizedDatasets);
+    const valueData = normalizedDatasets.map(data => alignSeries(timeData, data.time, data.value));
     const plotData = [timeData];
 
     // uPlot requires every series array to have the same length as X.
@@ -1981,22 +1982,81 @@ async function updateChart(chartId, parameter) {
     updateButtonStates();
 }
 
-function buildSharedTimeAxis(datasets) {
-    const merged = [];
-    datasets.forEach(data => {
-        for (const value of (data.time || [])) {
-            const timestamp = Number(value);
-            if (Number.isFinite(timestamp)) merged.push(timestamp);
-        }
-    });
-    merged.sort((a, b) => a - b);
-    const unique = [];
-    let previous;
-    merged.forEach(timestamp => {
-        if (!unique.length || timestamp !== previous) unique.push(timestamp);
+function normalizeTimeSeries(data) {
+    const sourceTime = data?.time || [];
+    const sourceValue = data?.value || [];
+    const rows = [];
+    let ordered = true;
+    let previous = -Infinity;
+
+    // Filter invalid timestamps before alignment. A single NaN at index 0
+    // would otherwise make every comparison in alignSeries fail.
+    const count = Math.min(sourceTime.length, sourceValue.length);
+    for (let i = 0; i < count; i++) {
+        const timestamp = Number(sourceTime[i]);
+        if (!Number.isFinite(timestamp)) continue;
+        if (timestamp < previous) ordered = false;
         previous = timestamp;
-    });
-    return new Float64Array(unique);
+        rows.push({ timestamp, value: sourceValue[i] });
+    }
+
+    if (!ordered) rows.sort((a, b) => a.timestamp - b.timestamp);
+
+    const time = [];
+    const value = [];
+    for (const row of rows) {
+        const lastIndex = time.length - 1;
+        if (lastIndex >= 0 && time[lastIndex] === row.timestamp) {
+            // Keep the last sample for duplicate timestamps, matching the
+            // storage writer's duplicate policy.
+            value[lastIndex] = row.value;
+        } else {
+            time.push(row.timestamp);
+            value.push(row.value);
+        }
+    }
+    return { ...data, time, value };
+}
+
+function buildSharedTimeAxis(datasets) {
+    // Each channel is sorted by normalizeTimeSeries(), so a k-way merge is
+    // linear in the total sample count and avoids an expensive global sort.
+    const sources = datasets
+        .map(data => data?.time || [])
+        .filter(time => time.length > 0);
+    const indices = sources.map(() => 0);
+    const merged = [];
+    let previous = NaN;
+
+    while (true) {
+        let minimum = Infinity;
+        let hasSource = false;
+        for (let i = 0; i < sources.length; i++) {
+            const index = indices[i];
+            if (index >= sources[i].length) continue;
+            const timestamp = Number(sources[i][index]);
+            if (!Number.isFinite(timestamp)) {
+                indices[i] += 1;
+                i -= 1;
+                continue;
+            }
+            hasSource = true;
+            if (timestamp < minimum) minimum = timestamp;
+        }
+        if (!hasSource) break;
+
+        if (minimum !== previous) {
+            merged.push(minimum);
+            previous = minimum;
+        }
+        for (let i = 0; i < sources.length; i++) {
+            while (indices[i] < sources[i].length &&
+                    Number(sources[i][indices[i]]) === minimum) {
+                indices[i] += 1;
+            }
+        }
+    }
+    return new Float64Array(merged);
 }
 
 function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignmentPolicy) {
