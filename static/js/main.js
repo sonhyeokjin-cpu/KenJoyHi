@@ -1871,6 +1871,8 @@ async function updateChartData(chartId, parameters, start, end) {
     // A zoom/pan wholly inside the rendered raw samples only changes the
     // viewport; uPlot can clip the existing arrays without another setData.
     if (requestedRange && sameParameters && rangeContains(chart.dataRange, requestedRange)) {
+        // Cancel any stale network response; the current viewport is already cached.
+        chart.isUpdating = false;
         chart.loadedRange = { ...requestedRange };
         chart.viewRange = { ...requestedRange };
         setChartXRange(chart, requestedRange);
@@ -1883,6 +1885,7 @@ async function updateChartData(chartId, parameters, start, end) {
     );
 
     if (cacheCoversRange) {
+        chart.isUpdating = false;
         const datasets = parameterList.map(parameter =>
             sliceDataset(chart.rawDataByParameter.get(parameter).data, requestedRange)
         );
