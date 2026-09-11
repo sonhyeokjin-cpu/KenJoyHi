@@ -1487,6 +1487,10 @@ function createChart() {
         dataRequestVersion: 0,
         loadedRange: null,
         initialScale: null,
+        viewRange: null,
+        dataRange: null,
+        renderedParameters: [],
+        rawDataByParameter: new Map(),
         data: {
             time: new Float64Array(0),
             values: [new Float64Array(0), new Float64Array(0), new Float64Array(0)]
@@ -1556,11 +1560,15 @@ async function deleteParameter(chartId, paramIndex) {
     const chart = charts.find(c => c.id === chartId);
     if (!chart) return;
 
+    const removedParameters = paramIndex === 'all'
+        ? chart.parameters.slice()
+        : [chart.parameters[paramIndex]].filter(Boolean);
     if (paramIndex === 'all') {
         chart.parameters = [];
     } else {
         chart.parameters.splice(paramIndex, 1);
     }
+    removedParameters.forEach(parameter => chart.rawDataByParameter?.delete(parameter));
 
     if (chart.parameters.length === 0) {
         // Clear the chart data
@@ -1575,6 +1583,10 @@ async function deleteParameter(chartId, paramIndex) {
             time: new Float64Array(0),
             values: [new Float64Array(0), new Float64Array(0), new Float64Array(0)]
         };
+        chart.dataRange = null;
+        chart.viewRange = null;
+        chart.renderedParameters = [];
+        chart.rawDataByParameter?.clear();
         
         // Reset title
         const chartContainer = document.getElementById(chartId);
@@ -1706,13 +1718,105 @@ function setChartXRange(chart, range) {
     chart.lastZoom = { ...range };
 }
 
+function rangeContains(outer, inner) {
+    const outerRange = validTimeRange(outer?.min, outer?.max);
+    const innerRange = validTimeRange(inner?.min, inner?.max);
+    return Boolean(outerRange && innerRange &&
+        outerRange.min <= innerRange.min && outerRange.max >= innerRange.max);
+}
+
+function datasetRange(data, fallback = null) {
+    if (data?.time?.length) {
+        const first = Number(data.time[0]);
+        const last = Number(data.time[data.time.length - 1]);
+        if (Number.isFinite(first) && Number.isFinite(last) && first < last) {
+            return { min: first, max: last };
+        }
+    }
+    return validTimeRange(fallback?.min, fallback?.max);
+}
+
+function sliceDataset(data, range) {
+    if (!data?.time?.length || !range) return data || { time: [], value: [] };
+    const min = Number(range.min);
+    const max = Number(range.max);
+    const time = data.time;
+    let lo = 0;
+    let hi = time.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (Number(time[mid]) < min) lo = mid + 1;
+        else hi = mid;
+    }
+    const startIndex = lo;
+    lo = startIndex;
+    hi = time.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (Number(time[mid]) <= max) lo = mid + 1;
+        else hi = mid;
+    }
+    const endIndex = lo;
+    return {
+        ...data,
+        time: time.slice(startIndex, endIndex),
+        value: (data.value || []).slice(startIndex, endIndex)
+    };
+}
+
+function renderChartData(chart, parameterList, datasets, range = null) {
+    const timeData = buildSharedTimeAxis(datasets);
+    const valueData = datasets.map(data => alignSeries(timeData, data.time, data.value));
+    const plotData = [timeData];
+
+    // uPlot requires every series array to have the same length as X.
+    // Unassigned channels are padded with NaN and explicitly hidden below.
+    for (let i = 0; i < 3; i++) {
+        const values = valueData[i] || new Float64Array(0);
+        const padded = new Float64Array(timeData.length);
+        padded.fill(NaN);
+        if (values.length) padded.set(values.subarray(0, timeData.length));
+        plotData.push(padded);
+    }
+
+    chart.data = { time: timeData, values: valueData };
+    chart.dataRange = datasetRange({ time: timeData }, range);
+    chart.renderedParameters = parameterList.slice();
+    chart.suppressRangeReload = true;
+    try {
+        chart.plot.setData(plotData);
+        for (let seriesIndex = 1; seriesIndex <= 3; seriesIndex++) {
+            const assigned = seriesIndex <= parameterList.length &&
+                valueData[seriesIndex - 1] && valueData[seriesIndex - 1].length > 0;
+            if (typeof chart.plot.setSeries === 'function') {
+                chart.plot.setSeries(seriesIndex, { show: assigned });
+            } else if (chart.plot.series?.[seriesIndex]) {
+                chart.plot.series[seriesIndex].show = assigned;
+            }
+        }
+        if (!isFixedScale) chart.plot.setScale('y', { min: null, max: null });
+    } finally {
+        chart.suppressRangeReload = false;
+    }
+    if (range) {
+        chart.loadedRange = { ...range };
+        chart.viewRange = { ...range };
+        setChartXRange(chart, range);
+    }
+}
+
 async function synchronizeChartRange(range) {
     const normalized = validTimeRange(range?.min, range?.max);
     if (!normalized) return;
     const targets = charts.filter(chart => chart.parameters?.length && chart.plot);
     targets.forEach(chart => setChartXRange(chart, normalized));
     await Promise.all(targets.map(chart => {
-        if (sameRange(chart.loadedRange, normalized)) return Promise.resolve();
+        const sameParameters = chart.renderedParameters?.length === chart.parameters.length &&
+            chart.renderedParameters?.every((parameter, index) => parameter === chart.parameters[index]);
+        if (sameParameters && rangeContains(chart.dataRange, normalized)) {
+            chart.viewRange = { ...normalized };
+            return Promise.resolve();
+        }
         return updateChartData(chart.id, chart.parameters, normalized.min, normalized.max);
     }));
 }
@@ -1734,12 +1838,20 @@ function scheduleChartRangeReload(chartId, plot) {
     const min = Number(plot?.scales?.x?.min);
     const max = Number(plot?.scales?.x?.max);
     if (!chart?.parameters?.length || chart.suppressRangeReload ||
-        !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
+        chart.isUpdating || !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
 
+    const requestedRange = { min, max };
+    // Keep all chart viewports paired immediately during a drag. Data fetches
+    // remain debounced until the gesture settles.
+    charts.filter(item => item.id !== chartId && item.parameters?.length && item.plot)
+        .forEach(item => setChartXRange(item, requestedRange));
     clearTimeout(chart.updateTimeout);
     chart.updateTimeout = setTimeout(async () => {
-        const requestedRange = { min, max };
-        await synchronizeChartRange(requestedRange);
+        try {
+            await synchronizeChartRange(requestedRange);
+        } catch (error) {
+            console.error('Unable to synchronize chart ranges:', error);
+        }
     }, RANGE_RELOAD_DEBOUNCE_MS);
 }
 
@@ -1747,88 +1859,75 @@ function scheduleChartRangeReload(chartId, plot) {
 async function updateChartData(chartId, parameters, start, end) {
     const chart = charts.find(c => c.id === chartId);
     if (!chart || !parameters || parameters.length === 0) return;
+
+    const parameterList = parameters.slice(0, 3);
+    const requestedRange = validTimeRange(start, end);
     const requestVersion = (chart.dataRequestVersion || 0) + 1;
     chart.dataRequestVersion = requestVersion;
 
+    const sameParameters = chart.renderedParameters?.length === parameterList.length &&
+        chart.renderedParameters?.every((parameter, index) => parameter === parameterList[index]);
+
+    // A zoom/pan wholly inside the rendered raw samples only changes the
+    // viewport; uPlot can clip the existing arrays without another setData.
+    if (requestedRange && sameParameters && rangeContains(chart.dataRange, requestedRange)) {
+        // Cancel any stale network response; the current viewport is already cached.
+        chart.isUpdating = false;
+        chart.loadedRange = { ...requestedRange };
+        chart.viewRange = { ...requestedRange };
+        setChartXRange(chart, requestedRange);
+        updateChartTitle(chart);
+        return;
+    }
+
+    const cacheCoversRange = requestedRange && parameterList.every(parameter =>
+        rangeContains(chart.rawDataByParameter?.get(parameter)?.loadedRange, requestedRange)
+    );
+
+    if (cacheCoversRange) {
+        chart.isUpdating = false;
+        const datasets = parameterList.map(parameter =>
+            sliceDataset(chart.rawDataByParameter.get(parameter).data, requestedRange)
+        );
+        renderChartData(chart, parameterList, datasets, requestedRange);
+        updateChartTitle(chart);
+        return;
+    }
+
+    const fetchStart = requestedRange ? requestedRange.min : -Infinity;
+    const fetchEnd = requestedRange ? requestedRange.max : Infinity;
+    chart.isUpdating = true;
+    const chartContainer = document.getElementById(chartId);
+    const titleElement = chartContainer?.querySelector('.chart-title');
+    if (titleElement) {
+        titleElement.innerHTML = '<span style="color: #1976d2; font-style: italic;">Loading Data...</span>';
+    }
+
     try {
-        const startParam = (start === undefined || start === null) ? -Infinity : start;
-        const endParam = (end === undefined || end === null) ? Infinity : end;
-
-        chart.isUpdating = true;
-
-        const chartContainer = document.getElementById(chartId);
-        const titleElement = chartContainer?.querySelector('.chart-title');
-        if (titleElement) {
-            titleElement.innerHTML = `<span style="color: #1976d2; font-style: italic;">Loading Data...</span>`;
-        }
-
-        try {
-            const dataPromises = parameters.map(param => fetchChartData(param, startParam, endParam));
-            const allData = await Promise.all(dataPromises);
-            if (requestVersion !== chart.dataRequestVersion) return;
-
-            const timeData = buildSharedTimeAxis(allData);
-            // Preserve every returned channel timestamp on a shared axis,
-            // then align the individual value arrays to that union.
-            const valueData = allData.map(data => alignSeries(timeData, data.time, data.value));
-
-            chart.data = { time: timeData, values: valueData };
-
-            // Ensure data array is padded to match the number of series (1 time + 3 values)
-            const plotData = [timeData];
-            for (let i = 0; i < 3; i++) {
-                plotData.push(valueData[i] || new Float64Array(0));
+        const datasets = await Promise.all(parameterList.map(async parameter => {
+            const cached = chart.rawDataByParameter?.get(parameter);
+            if (requestedRange && cached && rangeContains(cached.loadedRange, requestedRange)) {
+                return sliceDataset(cached.data, requestedRange);
             }
+            const fetched = await fetchChartData(parameter, fetchStart, fetchEnd);
+            const fallbackRange = requestedRange || datasetRange(fetched);
+            chart.rawDataByParameter.set(parameter, {
+                data: fetched,
+                loadedRange: fallbackRange
+            });
+            return fetched;
+        }));
+        if (requestVersion !== chart.dataRequestVersion) return;
 
-            chart.plot.setData(plotData);
-
-            // setData() preserves prior visibility state. Explicitly restore
-            // every assigned channel so adding channel 2/3 cannot leave the
-            // new series hidden after a previous fixed-scale or limit-line
-            // operation.
-            for (let seriesIndex = 1; seriesIndex <= 3; seriesIndex++) {
-                const assigned = seriesIndex <= parameters.length &&
-                    valueData[seriesIndex - 1] &&
-                    valueData[seriesIndex - 1].length > 0;
-                if (typeof chart.plot.setSeries === 'function') {
-                    chart.plot.setSeries(seriesIndex, { show: assigned });
-                } else if (chart.plot.series?.[seriesIndex]) {
-                    chart.plot.series[seriesIndex].show = assigned;
-                }
-            }
-
-            // Let uPlot recompute the data-driven Y range whenever fixed
-            // limits are not enabled. This is important after a second
-            // parameter changes the shared time axis.
-            if (!isFixedScale) {
-                chart.plot.setScale('y', { min: null, max: null });
-            }
-
-            chart.loadedRange = { min: Number(startParam), max: Number(endParam) };
-
-            if (isFixedScale && parameters.length >= 1) {
-                const config = (window.configData || []).find(c => c.parameter_name === parameters[0]);
-                if (config && isFinite(Number(config.lo)) && isFinite(Number(config.hi))) {
-                    chart.plot.setScale('y', { min: Number(config.lo), max: Number(config.hi) });
-                }
-            }
-
-        } finally {
-            if (requestVersion === chart.dataRequestVersion) {
-                chart.isUpdating = false;
-                updateChartTitle(chart);
-            }
-        }
+        renderChartData(chart, parameterList, datasets, requestedRange);
     } catch (error) {
         if (requestVersion !== chart.dataRequestVersion) return;
         console.error('Error updating chart data:', error);
-        chart.isUpdating = false;
-        const chartContainer = document.getElementById(chartId);
-        if (chartContainer) {
-            const titleElement = chartContainer.querySelector('.chart-title');
-            if (titleElement) {
-                titleElement.textContent = `Error: ${error.message}`;
-            }
+        if (titleElement) titleElement.textContent = 'Error: ' + error.message;
+    } finally {
+        if (requestVersion === chart.dataRequestVersion) {
+            chart.isUpdating = false;
+            updateChartTitle(chart);
         }
     }
 }
@@ -1856,6 +1955,10 @@ async function updateChart(chartId, parameter) {
 
             chart.initialScale = initialScale;
             chart.lastZoom = initialScale;
+            chart.rawDataByParameter.set(parameter, {
+                data,
+                loadedRange: initialScale
+            });
 
             // Update the chart with the full data
             await updateChartData(chartId, chart.parameters, initialScale.min, initialScale.max);
