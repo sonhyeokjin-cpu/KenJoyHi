@@ -1776,30 +1776,27 @@ function commonInteriorRange(datasets) {
     return min < max ? { min, max } : null;
 }
 
-function renderChartData(chart, parameterList, datasets, range = null) {
-    const normalizedDatasets = datasets.map(normalizeTimeSeries);
-    const requestedRange = validTimeRange(range?.min, range?.max);
-    const sourceTimeData = buildSharedTimeAxis(normalizedDatasets);
-    const sourceRange = datasetRange({ time: sourceTimeData });
+function finiteValueCount(values) {
+    if (!values || typeof values.length !== 'number') return 0;
+    let count = 0;
+    for (let i = 0; i < values.length; i++) {
+        if (Number.isFinite(Number(values[i]))) count++;
+    }
+    return count;
+}
 
-    // On a full-range reset, remove only the non-overlapping leading/trailing
-    // portions from the rendered view. The raw per-channel cache remains intact,
-    // so a user-selected partial range can still show those endpoint samples.
-    const isFullRange = Boolean(requestedRange && chart.initialScale &&
-        sameRange(requestedRange, chart.initialScale));
-    const interiorRange = parameterList.length > 1 && isFullRange
-        ? commonInteriorRange(normalizedDatasets)
-        : null;
-    const renderDatasets = interiorRange
-        ? normalizedDatasets.map(data => sliceDataset(data, interiorRange))
-        : normalizedDatasets;
+function datasetForRender(data, range = null) {
+    const normalized = normalizeTimeSeries(data);
+    if (!range || !normalized?.time?.length) return normalized;
+    const sliced = sliceDataset(normalized, range);
+    // A global range can use a different clock basis from one legacy channel.
+    // Never discard that channel just because its range slice is empty.
+    return sliced?.time?.length ? sliced : normalized;
+}
 
-    const timeData = buildSharedTimeAxis(renderDatasets);
-    const valueData = renderDatasets.map(data => alignSeries(timeData, data.time, data.value));
+function buildPlotData(chart, timeData, valueData) {
     const plotData = [timeData];
-
-    // uPlot requires every series array to have the same length as X.
-    // Unassigned channels are padded with NaN and explicitly hidden below.
+    // uPlot requires every series array to have exactly the X length.
     for (let i = 0; i < 3; i++) {
         const values = valueData[i] || new Float64Array(0);
         const padded = new Float64Array(timeData.length);
@@ -1807,6 +1804,52 @@ function renderChartData(chart, parameterList, datasets, range = null) {
         if (values.length) padded.set(values.subarray(0, timeData.length));
         plotData.push(padded);
     }
+
+    // Fixed-scale limit lines are dynamic uPlot series. Keep the data and
+    // series definitions in lockstep so setData cannot fail on a stale line.
+    const seriesCount = Math.max(4, chart.plot?.series?.length || 4);
+    const previousData = chart.plot?.data || [];
+    while (plotData.length < seriesCount) {
+        const previous = previousData[plotData.length];
+        if (previous && previous.length === timeData.length) {
+            plotData.push(previous.slice ? previous.slice() : previous);
+        } else {
+            const extra = new Float64Array(timeData.length);
+            extra.fill(NaN);
+            plotData.push(extra);
+        }
+    }
+    if (plotData.length > seriesCount) plotData.length = seriesCount;
+    return plotData;
+}
+
+function renderChartData(chart, parameterList, datasets, range = null) {
+    const normalizedDatasets = datasets.map(normalizeTimeSeries);
+    const requestedRange = validTimeRange(range?.min, range?.max);
+
+    // A full-range reset trims only the non-overlapping endpoints for the
+    // normal case, while datasetForRender() preserves a channel whose clock
+    // does not overlap the requested range (legacy/absolute timestamp data).
+    const isFullRange = Boolean(requestedRange && chart.initialScale &&
+        sameRange(requestedRange, chart.initialScale));
+    const interiorRange = parameterList.length > 1 && isFullRange
+        ? commonInteriorRange(normalizedDatasets)
+        : null;
+    const renderDatasets = interiorRange
+        ? normalizedDatasets.map(data => datasetForRender(data, interiorRange))
+        : normalizedDatasets.map(data => datasetForRender(data, requestedRange));
+
+    let timeData = buildSharedTimeAxis(renderDatasets);
+    if (!timeData.length) {
+        // A mismatched full-range request must never leave an empty canvas.
+        timeData = buildSharedTimeAxis(normalizedDatasets);
+    }
+
+    const valueData = normalizedDatasets.map((_, index) => {
+        const source = renderDatasets[index] || { time: [], value: [] };
+        return alignSeries(timeData, source.time, source.value);
+    });
+    const plotData = buildPlotData(chart, timeData, valueData);
 
     chart.data = { time: timeData, values: valueData };
     const actualRange = datasetRange({ time: timeData });
@@ -1817,29 +1860,35 @@ function renderChartData(chart, parameterList, datasets, range = null) {
         : actualRange;
     chart.dataRange = actualRange || displayRange;
     chart.renderedParameters = parameterList.slice();
+
     chart.suppressRangeReload = true;
     try {
         chart.plot.setData(plotData);
         for (let seriesIndex = 1; seriesIndex <= 3; seriesIndex++) {
             const assigned = seriesIndex <= parameterList.length &&
-                valueData[seriesIndex - 1] && valueData[seriesIndex - 1].length > 0;
+                finiteValueCount(valueData[seriesIndex - 1]) > 0;
             if (typeof chart.plot.setSeries === 'function') {
                 chart.plot.setSeries(seriesIndex, { show: assigned });
             } else if (chart.plot.series?.[seriesIndex]) {
                 chart.plot.series[seriesIndex].show = assigned;
             }
         }
+
+        // Set X before resetting Y so uPlot computes an autoscale from the
+        // visible data range in the same render transaction.
+        if (displayRange) chart.plot.setScale('x', displayRange);
         if (!isFixedScale) chart.plot.setScale('y', { min: null, max: null });
+        if (typeof chart.plot.redraw === 'function') chart.plot.redraw();
     } finally {
         chart.suppressRangeReload = false;
     }
+
     if (displayRange) {
         chart.loadedRange = { ...displayRange };
         chart.viewRange = { ...displayRange };
-        setChartXRange(chart, displayRange);
+        chart.lastZoom = { ...displayRange };
     }
 }
-
 async function synchronizeChartRange(range) {
     const normalized = validTimeRange(range?.min, range?.max);
     if (!normalized) return;
