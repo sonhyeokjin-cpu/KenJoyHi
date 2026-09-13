@@ -219,6 +219,10 @@ def build_command(mode: str) -> list[str]:
         "--windowed",
         "--name",
         APP_NAME,
+        # app.py와 같은 디렉터리에 app.spec가 있어도 기존 spec을 덮어쓰지 않도록
+        # 자동 생성 spec을 임시 build 디렉터리에 둡니다.
+        "--specpath",
+        str(BUILD_DIR),
         "--distpath",
         str(DIST_DIR),
         "--workpath",
