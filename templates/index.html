@@ -73,6 +73,8 @@
         .helicopter .heli-detail { fill: none; stroke: #22d3ee; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
         .helicopter .heli-trace { fill: none; stroke: rgba(125,211,252,.6); stroke-width: 1;
             stroke-dasharray: 5 8; animation: traceFlow 2.2s linear infinite; }
+        .helicopter .rotor-disc { transform-box: fill-box; transform-origin: center;
+            animation: rotorSpin .18s linear infinite; opacity: .72; }
         .loading-brand { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 24px;
             opacity: 0; animation: brandReveal .8s .65s cubic-bezier(.22,.61,.36,1) forwards; }
         .loading-brand .brand-wave { color: #f8fafc; font: 700 clamp(2.15rem,5vw,3.35rem)/1 Inter,'Segoe UI',sans-serif;
@@ -88,6 +90,7 @@
         @keyframes startupBoot { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes helicopterCruise { from { opacity: 0; transform: translateX(-34px) scale(.94); } 55% { opacity: 1; } to { opacity: 1; transform: translateX(0) scale(1); } }
         @keyframes traceFlow { to { stroke-dashoffset: -26; } }
+        @keyframes rotorSpin { to { transform: rotate(360deg); } }
         @keyframes reticleBreath { 0%,100% { transform: scale(.96); opacity: .55; } 50% { transform: scale(1.04); opacity: .95; } }
         @keyframes brandReveal { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes startupProgress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
@@ -95,7 +98,7 @@
         @keyframes startupScan { from { transform: translateY(-12%); } to { transform: translateY(12%); } }
         @media (prefers-reduced-motion: reduce) {
             .loading-container::after,.loading-state::before,.loading-reticle,.helicopter,.helicopter .heli-trace,
-            .loading-shell,.loading-brand,.loading-subtitle,.loading-progress,.loading-progress span {
+            .helicopter .rotor-disc,.loading-shell,.loading-brand,.loading-subtitle,.loading-progress,.loading-progress span {
                 animation: none !important; opacity: 1 !important; transform: none !important;
             }
         }
@@ -1053,29 +1056,57 @@
             </div>
             <div class="loading-visual" aria-hidden="true">
                 <div class="loading-reticle"></div>
-                <svg class="helicopter" viewBox="0 0 640 280" role="img" aria-label="공격헬기 실루엣">
+                <svg class="helicopter" viewBox="0 0 760 300" role="img" aria-label="틸트로터 공격헬기 실루엣">
                     <g class="heli-trace">
-                        <path d="M72 69H555 M98 76H534 M128 61H505"></path>
-                        <path d="M62 207H575"></path>
+                        <path d="M54 78H274 M486 78H706"></path>
+                        <path d="M68 236H692"></path>
+                        <path d="M118 218H182 M580 218H642"></path>
                     </g>
                     <g class="heli-fill">
-                        <path d="M147 150c18-29 49-43 91-43h83c28 0 51 8 71 24l65 4 86-38 41 2-18 14-76 36-42 8-53 21H236c-31 0-57-8-75-28z"></path>
-                        <path d="M315 108l-6-33h24l7 33z"></path>
-                        <path d="M184 179h221l-18 12H198z"></path>
-                        <path d="M183 177l-35 25h-19l30-36z"></path>
-                        <path d="M390 176l70 25h-19l-73-14z"></path>
-                        <path d="M236 154l-28 30h-19l18-40z"></path>
-                        <path d="M365 153l38 32h-19l-40-22z"></path>
+                        <!-- central fuselage and cockpit -->
+                        <path d="M132 173c13-30 44-48 87-50l75-2c26 0 49 7 70 21l101 4 56-19 48 2-19 17-66 27-92 13H204c-31 0-56-4-72-13z"></path>
+                        <path d="M180 162c13-25 34-35 63-37l34 1-19 36z"></path>
+                        <!-- broad wing and rear tail boom -->
+                        <path d="M232 139L500 137 575 165 185 165z"></path>
+                        <path d="M478 151l136-43 76 4-20 18-127 46z"></path>
+                        <path d="M584 173l102 39-29 7-112-30z"></path>
+                        <path d="M603 161l106-43 35 6-77 54z"></path>
+                        <!-- twin engine nacelles -->
+                        <path d="M205 105c11-14 35-18 55-10l21 11-6 34-62-1-17-14z"></path>
+                        <path d="M475 105c11-14 35-18 55-10l21 11-6 34-62-1-17-14z"></path>
+                        <!-- rotor masts -->
+                        <path d="M230 105l-5-31h18l8 31z"></path>
+                        <path d="M500 105l-5-31h18l8 31z"></path>
+                        <!-- landing gear -->
+                        <path d="M220 179l-7 31h12l13-31z"></path>
+                        <path d="M516 181l8 29h12l-8-32z"></path>
+                        <path d="M205 210h31 M513 210h31"></path>
                     </g>
                     <g class="heli-detail">
-                        <path d="M170 148c28-29 61-33 98-33h39l-23 35h-90z"></path>
-                        <path d="M284 115l-14 35h-12"></path>
-                        <path d="M325 114h39l27 30"></path>
-                        <path d="M408 145l55 3"></path>
-                        <path d="M474 143l60-25"></path>
-                        <path d="M214 188h188"></path>
-                        <path d="M146 201h-33 M460 201h35"></path>
-                        <circle cx="305" cy="92" r="3"></circle>
+                        <!-- rotor discs / blades -->
+                        <g class="rotor-disc">
+                            <path d="M104 73H366"></path>
+                            <path d="M235 28V119"></path>
+                            <path d="M139 39l190 68"></path>
+                            <path d="M331 39L141 107"></path>
+                        </g>
+                        <g class="rotor-disc">
+                            <path d="M374 73H636"></path>
+                            <path d="M505 28V119"></path>
+                            <path d="M409 39l190 68"></path>
+                            <path d="M601 39l-190 68"></path>
+                        </g>
+                        <!-- cockpit glazing, intake and airframe details -->
+                        <path d="M148 170c17-21 38-33 66-38l35 1-19 34-82 8z"></path>
+                        <path d="M179 157l35 1 M203 138l-7 30"></path>
+                        <path d="M287 139h48 M352 139h42 M416 139h42"></path>
+                        <path d="M282 165v18 M315 165v18 M348 165v18"></path>
+                        <path d="M560 153l54-17 M583 169l76-20"></path>
+                        <path d="M206 188h329"></path>
+                        <circle cx="234" cy="120" r="7"></circle>
+                        <circle cx="504" cy="120" r="7"></circle>
+                        <circle cx="188" cy="210" r="5"></circle>
+                        <circle cx="535" cy="210" r="5"></circle>
                     </g>
                 </svg>
             </div>
