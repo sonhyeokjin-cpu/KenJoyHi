@@ -21,100 +21,83 @@
     }
     </script>
     <style>
-        /* 로딩 애니메이션 컨테이너 */
+        /* WaveLab startup sequence */
         .loading-container {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            background-color: var(--bg-color);
-            z-index: 9999;
-            opacity: 1;
-            transition: opacity 0.5s ease-out;
+            position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
+            overflow: hidden; isolation: isolate; color: #d8f5ff;
+            background: radial-gradient(circle at 50% 44%, rgba(14,116,144,.22), transparent 34%),
+                        linear-gradient(135deg, #050b15 0%, #091525 52%, #0b1220 100%);
+            opacity: 1; transition: opacity .72s cubic-bezier(.22,.61,.36,1);
         }
-
-        .loading-container.fade-out {
-            opacity: 0;
-            pointer-events: none;
+        .loading-container::before {
+            content: ""; position: absolute; inset: 0; z-index: -2; opacity: .28;
+            background-image: linear-gradient(rgba(56,189,248,.08) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(56,189,248,.08) 1px, transparent 1px);
+            background-size: 42px 42px;
+            mask-image: linear-gradient(to bottom, transparent, #000 20%, #000 78%, transparent);
         }
-
-        /* 로고 애니메이션 */
-        .logo-container {
-            position: relative;
-            width: 200px;
-            height: 200px;
-            margin-bottom: 20px;
-            opacity: 0;
-            transform: translateY(20px);
-            animation: logoAppear 1s ease-out forwards;
+        .loading-container::after {
+            content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: .2;
+            background: repeating-linear-gradient(to bottom, transparent 0, transparent 3px,
+                         rgba(125,211,252,.08) 4px, transparent 5px);
+            animation: startupScan 4s linear infinite;
         }
-
-        .logo-container img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-
-        /* 슬로건 애니메이션 */
-        .slogan {
-            font-size: 2rem;
-            color: var(--text-color);
-            opacity: 0;
-            transform: translateY(20px);
-            animation: sloganAppear 1s ease-out 0.5s forwards;
-            text-align: center;
-            margin-top: 20px;
-        }
-
-        /* 애니메이션 키프레임 */
-        @keyframes logoAppear {
-            0% {
-                opacity: 0;
-                transform: translateY(20px) scale(0.8);
+        .loading-container.fade-out { opacity: 0; pointer-events: none; }
+        .loading-shell { width: min(720px,88vw); position: relative; text-align: center;
+            animation: startupBoot .9s cubic-bezier(.22,.61,.36,1) both; }
+        .loading-kicker { display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 18px; color: #7dd3fc; font: 600 10px/1 Inter,'Segoe UI',sans-serif;
+            letter-spacing: .2em; text-transform: uppercase; }
+        .loading-kicker .loading-state { color: #67e8f9; display: inline-flex; align-items: center; gap: 7px; }
+        .loading-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+            background: #22d3ee; box-shadow: 0 0 0 4px rgba(34,211,238,.12), 0 0 18px #22d3ee;
+            animation: startupPulse 1.2s ease-in-out infinite; }
+        .loading-visual { position: relative; height: 230px; display: grid; place-items: center;
+            border-top: 1px solid rgba(125,211,252,.22); border-bottom: 1px solid rgba(125,211,252,.22); }
+        .loading-visual::before,.loading-visual::after { content: ""; position: absolute; top: 50%;
+            width: 15%; height: 1px; background: linear-gradient(90deg,transparent,rgba(56,189,248,.5)); }
+        .loading-visual::before { left: 0; }
+        .loading-visual::after { right: 0; transform: scaleX(-1); }
+        .loading-reticle { position: absolute; width: 176px; height: 176px;
+            border: 1px solid rgba(56,189,248,.24); border-radius: 50%;
+            box-shadow: 0 0 0 18px rgba(56,189,248,.035), inset 0 0 24px rgba(56,189,248,.08);
+            animation: reticleBreath 2.8s ease-in-out infinite; }
+        .loading-reticle::before,.loading-reticle::after { content: ""; position: absolute;
+            background: rgba(103,232,249,.55); }
+        .loading-reticle::before { left: 50%; top: -12px; width: 1px; height: calc(100% + 24px); }
+        .loading-reticle::after { top: 50%; left: -12px; width: calc(100% + 24px); height: 1px; }
+        .helicopter { position: relative; z-index: 1; width: min(570px,78vw); height: auto; overflow: visible;
+            filter: drop-shadow(0 0 12px rgba(34,211,238,.28));
+            animation: helicopterCruise 1.8s cubic-bezier(.22,.61,.36,1) both; }
+        .helicopter .heli-fill { fill: rgba(14,116,144,.16); stroke: #7dd3fc; stroke-width: 2; stroke-linejoin: round; }
+        .helicopter .heli-detail { fill: none; stroke: #22d3ee; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .helicopter .heli-trace { fill: none; stroke: rgba(125,211,252,.6); stroke-width: 1;
+            stroke-dasharray: 5 8; animation: traceFlow 2.2s linear infinite; }
+        .loading-brand { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 24px;
+            opacity: 0; animation: brandReveal .8s .65s cubic-bezier(.22,.61,.36,1) forwards; }
+        .loading-brand .brand-wave { color: #f8fafc; font: 700 clamp(2.15rem,5vw,3.35rem)/1 Inter,'Segoe UI',sans-serif;
+            letter-spacing: .12em; }
+        .loading-brand .brand-lab { color: #38bdf8; font: 600 clamp(2.2rem,5vw,3.4rem)/1 'Dancing Script',cursive; }
+        .loading-subtitle { margin-top: 9px; color: #94a3b8; font: 500 10px/1.4 Inter,'Segoe UI',sans-serif;
+            letter-spacing: .28em; text-transform: uppercase; opacity: 0; animation: brandReveal .7s .9s ease-out forwards; }
+        .loading-progress { width: min(300px,58vw); height: 2px; margin: 24px auto 0; overflow: hidden;
+            background: rgba(148,163,184,.2); opacity: 0; animation: brandReveal .5s 1.05s ease-out forwards; }
+        .loading-progress span { display: block; width: 100%; height: 100%; transform-origin: left;
+            background: linear-gradient(90deg,#0284c7,#22d3ee); box-shadow: 0 0 14px rgba(34,211,238,.8);
+            animation: startupProgress 1.45s .15s cubic-bezier(.65,0,.35,1) both; }
+        @keyframes startupBoot { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes helicopterCruise { from { opacity: 0; transform: translateX(-34px) scale(.94); } 55% { opacity: 1; } to { opacity: 1; transform: translateX(0) scale(1); } }
+        @keyframes traceFlow { to { stroke-dashoffset: -26; } }
+        @keyframes reticleBreath { 0%,100% { transform: scale(.96); opacity: .55; } 50% { transform: scale(1.04); opacity: .95; } }
+        @keyframes brandReveal { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes startupProgress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+        @keyframes startupPulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+        @keyframes startupScan { from { transform: translateY(-12%); } to { transform: translateY(12%); } }
+        @media (prefers-reduced-motion: reduce) {
+            .loading-container::after,.loading-state::before,.loading-reticle,.helicopter,.helicopter .heli-trace,
+            .loading-shell,.loading-brand,.loading-subtitle,.loading-progress,.loading-progress span {
+                animation: none !important; opacity: 1 !important; transform: none !important;
             }
-            100% {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-
-        @keyframes sloganAppear {
-            0% {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            100% {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        /* 다크모드/라이트모드 변수 */
-        :root {
-            --bg-color: #ffffff;
-            --text-color: #333333;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg-color: #1a1a1a;
-                --text-color: #ffffff;
-            }
-        }
-
-        /* 기존 앱 컨테이너 스타일 수정 */
-        .app-container {
-            opacity: 0;
-            transition: opacity 0.5s ease-out;
-        }
-
-        .app-container.visible {
-            opacity: 1;
         }
 
         /* Scale Dialog Styles - Modernized */
@@ -1061,12 +1044,48 @@
     </style>
 </head>
 <body>
-    <!-- 로딩 애니메이션 컨테이너 -->
-    <div class="loading-container">
-        <div class="logo-container">
-            <img src="{{ url_for('static', filename='WaveLab_V2.png') }}" alt="WaveLab Logo">
+    <!-- WaveLab startup sequence -->
+    <div class="loading-container" role="status" aria-label="WaveLab 시작 중">
+        <div class="loading-shell">
+            <div class="loading-kicker">
+                <span>WAVELAB / FLIGHT TEST DATA</span>
+                <span class="loading-state">INITIALIZING</span>
+            </div>
+            <div class="loading-visual" aria-hidden="true">
+                <div class="loading-reticle"></div>
+                <svg class="helicopter" viewBox="0 0 640 280" role="img" aria-label="공격헬기 실루엣">
+                    <g class="heli-trace">
+                        <path d="M72 69H555 M98 76H534 M128 61H505"></path>
+                        <path d="M62 207H575"></path>
+                    </g>
+                    <g class="heli-fill">
+                        <path d="M147 150c18-29 49-43 91-43h83c28 0 51 8 71 24l65 4 86-38 41 2-18 14-76 36-42 8-53 21H236c-31 0-57-8-75-28z"></path>
+                        <path d="M315 108l-6-33h24l7 33z"></path>
+                        <path d="M184 179h221l-18 12H198z"></path>
+                        <path d="M183 177l-35 25h-19l30-36z"></path>
+                        <path d="M390 176l70 25h-19l-73-14z"></path>
+                        <path d="M236 154l-28 30h-19l18-40z"></path>
+                        <path d="M365 153l38 32h-19l-40-22z"></path>
+                    </g>
+                    <g class="heli-detail">
+                        <path d="M170 148c28-29 61-33 98-33h39l-23 35h-90z"></path>
+                        <path d="M284 115l-14 35h-12"></path>
+                        <path d="M325 114h39l27 30"></path>
+                        <path d="M408 145l55 3"></path>
+                        <path d="M474 143l60-25"></path>
+                        <path d="M214 188h188"></path>
+                        <path d="M146 201h-33 M460 201h35"></path>
+                        <circle cx="305" cy="92" r="3"></circle>
+                    </g>
+                </svg>
+            </div>
+            <div class="loading-brand" aria-label="WaveLab">
+                <span class="brand-wave">WAVE</span>
+                <span class="brand-lab">Lab</span>
+            </div>
+            <div class="loading-subtitle">FLIGHT DATA WORKSPACE <span aria-hidden="true">·</span> STARTUP SEQUENCE</div>
+            <div class="loading-progress" aria-hidden="true"><span></span></div>
         </div>
-        <div class="slogan">Uncover the unseen in your flight data</div>
     </div>
 
     <!-- 기존 앱 컨테이너 -->
@@ -1411,35 +1430,17 @@
             console.log('Font API not supported, using CSS fallback');
         }
 
-        // 로딩 애니메이션 처리
+        // Startup sequence: one coordinated reveal avoids competing timers.
         window.addEventListener('load', function() {
             const loadingContainer = document.querySelector('.loading-container');
             const appContainer = document.querySelector('.app-container');
-            
-            if (loadingContainer && appContainer) {
-                // 폰트 로딩 완료 후 애니메이션 시작
-                setTimeout(function() {
-                    loadingContainer.classList.add('fade-out');
-                    appContainer.classList.add('visible');
-                    
-                    setTimeout(function() {
-                        loadingContainer.style.display = 'none';
-                    }, 500);
-                }, 2000); // 2초 대기 후 페이드아웃 시작
-            }
-        });
-
-        // 로딩 애니메이션 처리
-        document.addEventListener('DOMContentLoaded', () => {
-            const loadingContainer = document.querySelector('.loading-container');
-            const appContainer = document.querySelector('.app-container');
-
-            // 2.5초 후에 로딩 화면을 페이드 아웃하고 앱을 표시
-            setTimeout(() => {
+            if (!loadingContainer || !appContainer) return;
+            window.setTimeout(function() {
                 loadingContainer.classList.add('fade-out');
                 appContainer.classList.add('visible');
-            }, 2500);
-        });
+                window.setTimeout(function() { loadingContainer.remove(); }, 760);
+            }, 1650);
+        }, { once: true });
     </script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 
