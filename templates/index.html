@@ -1053,31 +1053,9 @@
             </div>
             <div class="loading-visual" aria-hidden="true">
                 <div class="loading-reticle"></div>
-                <svg class="helicopter" viewBox="0 0 640 280" role="img" aria-label="공격헬기 실루엣">
-                    <g class="heli-trace">
-                        <path d="M72 69H555 M98 76H534 M128 61H505"></path>
-                        <path d="M62 207H575"></path>
-                    </g>
-                    <g class="heli-fill">
-                        <path d="M147 150c18-29 49-43 91-43h83c28 0 51 8 71 24l65 4 86-38 41 2-18 14-76 36-42 8-53 21H236c-31 0-57-8-75-28z"></path>
-                        <path d="M315 108l-6-33h24l7 33z"></path>
-                        <path d="M184 179h221l-18 12H198z"></path>
-                        <path d="M183 177l-35 25h-19l30-36z"></path>
-                        <path d="M390 176l70 25h-19l-73-14z"></path>
-                        <path d="M236 154l-28 30h-19l18-40z"></path>
-                        <path d="M365 153l38 32h-19l-40-22z"></path>
-                    </g>
-                    <g class="heli-detail">
-                        <path d="M170 148c28-29 61-33 98-33h39l-23 35h-90z"></path>
-                        <path d="M284 115l-14 35h-12"></path>
-                        <path d="M325 114h39l27 30"></path>
-                        <path d="M408 145l55 3"></path>
-                        <path d="M474 143l60-25"></path>
-                        <path d="M214 188h188"></path>
-                        <path d="M146 201h-33 M460 201h35"></path>
-                        <circle cx="305" cy="92" r="3"></circle>
-                    </g>
-                </svg>
+                <img class="helicopter helicopter-image"
+                     src="{{ url_for('static', filename='images/wavelab_tiltrotor.svg') }}"
+                     alt="WaveLab 틸트로터 항공기 실루엣">
             </div>
             <div class="loading-brand" aria-label="WaveLab">
                 <span class="brand-wave">WAVE</span>
