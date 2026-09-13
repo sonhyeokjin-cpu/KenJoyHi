@@ -1798,10 +1798,15 @@ function buildPlotData(chart, timeData, valueData) {
     const plotData = [timeData];
     // uPlot requires every series array to have exactly the X length.
     for (let i = 0; i < 3; i++) {
-        const values = valueData[i] || new Float64Array(0);
-        const padded = new Float64Array(timeData.length);
-        padded.fill(NaN);
-        if (values.length) padded.set(values.subarray(0, timeData.length));
+        const values = valueData[i] || [];
+        // uPlot treats null as a gap. NaN is passed to canvas path
+        // calculations as a numeric value and can invalidate a whole series.
+        const padded = new Array(timeData.length).fill(null);
+        const count = Math.min(values.length || 0, timeData.length);
+        for (let index = 0; index < count; index++) {
+            const numeric = Number(values[index]);
+            if (Number.isFinite(numeric)) padded[index] = numeric;
+        }
         plotData.push(padded);
     }
 
@@ -1814,9 +1819,7 @@ function buildPlotData(chart, timeData, valueData) {
         if (previous && previous.length === timeData.length) {
             plotData.push(previous.slice ? previous.slice() : previous);
         } else {
-            const extra = new Float64Array(timeData.length);
-            extra.fill(NaN);
-            plotData.push(extra);
+            plotData.push(new Array(timeData.length).fill(null));
         }
     }
     if (plotData.length > seriesCount) plotData.length = seriesCount;
@@ -2156,8 +2159,9 @@ function buildSharedTimeAxis(datasets) {
 }
 
 function alignSeries(referenceTime, sourceTime, sourceValues, policy = alignmentPolicy) {
-    const out = new Float64Array(referenceTime.length);
-    out.fill(NaN);
+    // uPlot expects null for missing samples. Keep the shared X axis intact
+    // while representing out-of-channel-range samples as explicit gaps.
+    const out = new Array(referenceTime.length).fill(null);
     if (!sourceTime || !sourceValues || sourceTime.length === 0) return out;
     const t = sourceTime;
     const v = sourceValues;
