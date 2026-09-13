@@ -1,458 +1,434 @@
 #!/usr/bin/env python3
 """
-최적화된 WaveLab 실행 파일 빌드 스크립트
-오프라인 환경에서 완전히 구동되도록 모든 의존성을 포함합니다.
+WaveLab 폐쇄망용 PyInstaller 빌드 스크립트.
+
+기본값은 one-file EXE입니다. 개발/검증 시에는
+    python build_optimized.py --mode onedir
+최종 배포 시에는
+    python build_optimized.py --mode onefile
+을 사용합니다.
+
+빌드 머신에서만 PyInstaller와 애플리케이션 의존성이 필요하며,
+생성된 EXE를 실행하는 대상 PC에는 Python이나 인터넷 연결이 필요하지 않습니다.
 """
+from __future__ import annotations
 
-import os
-import sys
+import argparse
 import builtins
-import subprocess
-import shutil
-import time
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 
-# 콘솔 인코딩 이슈(예: cp949)에서 이모지/유니코드가 깨질 때를 대비해 안전 출력 래퍼 적용
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+APP_NAME = "WaveLab"
+DIST_DIR = PROJECT_ROOT / "dist"
+BUILD_DIR = PROJECT_ROOT / "build"
+SERVER_URL = "http://127.0.0.1:9840/"
+
+# Static 폴더가 Analysis의 datas로 재귀 포함되지만, 핵심 파일을 사전에
+# 확인하여 빌드 성공 후 정적 리소스 누락으로 실패하는 상황을 줄입니다.
+REQUIRED_FILES = (
+    "app.py",
+    "templates/index.html",
+    "static/css/styles.css",
+    "static/js/main.js",
+    "static/js/uPlot.iife.min.js",
+    "static/js/html2canvas.min.js",
+    "static/js/uPlot.min.css",
+    "static/fonts/DancingScript-Regular.ttf",
+    "static/fonts/DancingScript-Medium.ttf",
+    "static/fonts/DancingScript-SemiBold.ttf",
+    "static/fonts/DancingScript-Bold.ttf",
+    "static/images/wavelab_tiltrotor.svg",
+)
+
+# NumPy는 PyInstaller 기본 hook으로 수집되지만, SciPy/h5py는 플랫폼별
+# 바이너리와 데이터 파일 누락 가능성이 있어 collect-all을 사용합니다.
+COLLECT_ALL_PACKAGES = ("numpy", "scipy", "h5py", "pandas")
+HIDDEN_IMPORTS = (
+    "numpy.f2py",
+    "numpy.linalg.lapack_lite",
+    "scipy._lib.array_api_compat",
+)
+
+
 def _safe_print(*args, **kwargs):
+    """Windows cp949 콘솔에서도 빌드 로그가 중단되지 않도록 출력합니다."""
     try:
         return builtins.print(*args, **kwargs)
     except UnicodeEncodeError:
-        msg = ' '.join(str(a) for a in args)
-        enc = (getattr(sys.stdout, 'encoding', None) or 'utf-8')
-        try:
-            msg = msg.encode(enc, errors='ignore').decode(enc, errors='ignore')
-        except Exception:
-            msg = msg.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
-        kwargs.pop('file', None)
-        return builtins.print(msg, **kwargs)
+        message = " ".join(str(arg) for arg in args)
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        message = message.encode(encoding, errors="ignore").decode(
+            encoding, errors="ignore"
+        )
+        kwargs.pop("file", None)
+        return builtins.print(message, **kwargs)
 
-# 모든 print 호출에 안전 래퍼 적용
+
 print = _safe_print
-def find_built_executable():
-    dist_dir = Path('dist')
-    if not dist_dir.exists():
-        return None
-    # 우선순위: WaveLab*.exe -> 기타 .exe (하위 폴더 포함 검색)
-    wave_candidates = sorted(dist_dir.glob('**/WaveLab*.exe'))
-    if wave_candidates:
-        return str(wave_candidates[0])
-    other = sorted(dist_dir.glob('**/*.exe'))
-    return str(other[0]) if other else None
 
-# 우선순위대로 아이콘 후보 경로 (존재하는 첫 경로 사용)
-ICON_CANDIDATES = [
 
-    'static/WaveLab_icon.ico',
-]
+def rel_path(path: Path) -> str:
+    """로그에 표시할 프로젝트 기준 경로를 반환합니다."""
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
 
-def pick_existing_icon_path():
-    for p in ICON_CANDIDATES:
-        if os.path.exists(p):
-            return p
+
+def find_built_executable() -> Path | None:
+    """one-file/one-dir 양쪽의 WaveLab.exe를 찾습니다."""
+    expected = DIST_DIR / f"{APP_NAME}.exe"
+    if expected.is_file():
+        return expected
+
+    expected_dir = DIST_DIR / APP_NAME / f"{APP_NAME}.exe"
+    if expected_dir.is_file():
+        return expected_dir
+
+    if DIST_DIR.exists():
+        candidates = sorted(DIST_DIR.rglob("*.exe"))
+        wave_candidates = [p for p in candidates if p.name.lower().startswith("wavelab")]
+        if wave_candidates:
+            return wave_candidates[0]
+        if candidates:
+            return candidates[0]
     return None
 
-def check_requirements():
-    """필요한 파일들과 의존성을 확인합니다."""
-    print("Checking requirements...")
-    
-    required_files = [
-        'app.py',
-        'app.spec',
-        'templates/index.html',
-        'static/css/styles.css',
-        'static/js/main.js',
-        'static/fonts/DancingScript-Regular.ttf',
-        'static/fonts/DancingScript-Bold.ttf',
-        'backend/__init__.py',
-        'backend/csv_loader.py',
-        'backend/db.py',
-        'backend/bit_extractor.py'
-    ]
-    
-    missing_files = []
-    for file_path in required_files:
-        if not os.path.exists(file_path):
-            missing_files.append(file_path)
-    
-    # The favicon is optional; PyInstaller can use its default icon when the
-    # repository does not carry a binary .ico asset.
 
-    if missing_files:
+def pick_existing_icon_path() -> Path | None:
+    """현재 저장소의 아이콘 이름을 우선순위대로 선택합니다."""
+    for name in ("WaveLab_V3.ico", "WaveLab_V3.0.ico", "WaveLab_icon.ico"):
+        candidate = PROJECT_ROOT / "static" / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def check_requirements() -> bool:
+    """소스, 템플릿, 정적 리소스가 모두 존재하는지 확인합니다."""
+    print("Checking source and static resources...")
+    missing = [
+        path for path in REQUIRED_FILES
+        if not (PROJECT_ROOT / path).is_file()
+    ]
+
+    if missing:
         print("❌ Missing required files:")
-        for file_path in missing_files:
-            print(f"   - {file_path}")
+        for path in missing:
+            print(f"   - {path}")
         return False
-    
-    print("✅ All required files found")
+
+    icon = pick_existing_icon_path()
+    if icon:
+        print(f"✅ Icon: {rel_path(icon)}")
+    else:
+        print("⚠️ Icon file not found; PyInstaller default icon will be used.")
+
+    # Monaco는 전체 트리가 존재하면 static 폴더를 통해 자동 포함됩니다.
+    # 없더라도 현재 index.html의 textarea fallback으로 실행할 수 있습니다.
+    monaco_loader = (
+        PROJECT_ROOT
+        / "static/js/monaco-editor/v0.52.2/min/vs/loader.js"
+    )
+    if monaco_loader.is_file():
+        print(f"✅ Monaco assets: {rel_path(monaco_loader.parent)}")
+    else:
+        print("ℹ️ Monaco full tree not found; editor fallback will be used.")
+
+    print(f"✅ {len(REQUIRED_FILES)} source/resource checks passed")
     return True
 
-def check_python_dependencies():
-    """Python 의존성을 확인합니다."""
+
+def check_python_dependencies() -> bool:
+    """requirements.txt에 정의된 실행/빌드 패키지를 확인합니다."""
     print("Checking Python dependencies...")
-    
-    required_packages = [
-        'flask', 'flask_cors', 'numpy', 'scipy', 'h5py', 
-        'pandas', 'PIL', 'werkzeug', 'jinja2'
-    ]
-    
-    missing_packages = []
-    for package in required_packages:
+    packages = (
+        ("flask", "flask"),
+        ("flask_cors", "flask-cors"),
+        ("numpy", "numpy"),
+        ("scipy", "scipy"),
+        ("h5py", "h5py"),
+        ("pandas", "pandas"),
+        ("PIL", "Pillow"),
+        ("werkzeug", "werkzeug"),
+        ("jinja2", "Jinja2"),
+        ("PyInstaller", "pyinstaller"),
+    )
+
+    missing = []
+    for import_name, display_name in packages:
         try:
-            __import__(package)
+            __import__(import_name)
         except ImportError:
-            missing_packages.append(package)
-    
-    if missing_packages:
+            missing.append(display_name)
+
+    if missing:
         print("❌ Missing Python packages:")
-        for package in missing_packages:
+        for package in missing:
             print(f"   - {package}")
         return False
-    
+
     print("✅ All Python dependencies found")
     return True
 
-def clean_build():
-    """이전 빌드 파일들을 정리합니다."""
+
+def clean_build() -> None:
+    """이전 PyInstaller 결과를 프로젝트 내부에서만 정리합니다."""
     print("Cleaning previous build files...")
-    
-    # PyInstaller 생성 파일들 정리
-    dirs_to_clean = ['build', 'dist', '__pycache__']
-    for dir_name in dirs_to_clean:
-        if os.path.exists(dir_name):
-            for i in range(3): # Retry up to 3 times
-                try:
-                    shutil.rmtree(dir_name)
-                    print(f"Removed {dir_name}/")
-                    break # Success
-                except PermissionError as e:
-                    print(f"⚠️ Permission error cleaning {dir_name}: {e}. Retrying in 2 seconds...")
-                    time.sleep(2)
-            else: # If loop finishes without break
-                print(f"❌ Failed to remove {dir_name} after multiple retries. Please close any running instances of the app and try again.")
-                sys.exit(1)
+    for path in (BUILD_DIR, DIST_DIR, PROJECT_ROOT / "__pycache__"):
+        if not path.exists():
+            continue
 
-    # .spec 파일 백업
-    if os.path.exists('app.spec'):
-        shutil.copy2('app.spec', 'app.spec.backup')
-        print("Backed up app.spec")
+        for attempt in range(1, 4):
+            try:
+                shutil.rmtree(path)
+                print(f"Removed {rel_path(path)}/")
+                break
+            except PermissionError as exc:
+                if attempt == 3:
+                    raise RuntimeError(
+                        f"Cannot remove {rel_path(path)}; close a running WaveLab instance."
+                    ) from exc
+                print(f"⚠️ {rel_path(path)} is locked; retrying...")
+                time.sleep(2)
 
-def verify_spec_file():
-    """app.spec 파일이 올바르게 설정되어 있는지 확인합니다."""
-    print("Verifying app.spec configuration...")
-    
-    with open('app.spec', 'r', encoding='utf-8') as f:
-        spec_content = f.read()
-    
-    ok = True
-    if ('templates' not in spec_content) or ('static' not in spec_content):
-        print("❌ 'templates' 또는 'static' 폴더가 app.spec datas에 포함되어 있지 않을 수 있습니다.")
-        ok = False
-    for kw in ['scipy', 'numpy', 'h5py', 'flask', 'numpy.f2py']:
-        if kw not in spec_content:
-            print(f"❌ hiddenimports에 '{kw}'가 포함되어 있지 않을 수 있습니다.")
-            ok = False
-    for opt in ['console=False', 'strip=False', 'optimize=2']:
-        if opt not in spec_content:
-            print(f"⚠️ '{opt}' 설정이 app.spec에서 발견되지 않았습니다. 설정을 확인하세요.")
-    
-    if not ok:
-        return False
-    
-    print("✅ app.spec configuration verified")
-    return True
 
-def build_executable():
-    """최적화된 실행 파일을 빌드합니다."""
-    print("Building optimized executable...")
+def data_argument(source: Path, destination: str) -> str:
+    """PyInstaller --add-data의 OS별 구분자를 적용합니다."""
+    separator = ";" if os.name == "nt" else ":"
+    return f"{source}{separator}{destination}"
 
-    # app.spec의 icon 경로를 실제 존재하는 아이콘으로 교체
-    spec_path = 'app.spec'
-    if os.path.exists(spec_path):
-        with open(spec_path, 'r', encoding='utf-8') as f:
-            spec_content = f.read()
-        import re
-        icon_path = pick_existing_icon_path()
-        if icon_path:
-            new_spec_content = re.sub(r"icon\s*=\s*['\"]([^'\"]*)['\"]", f"icon='{icon_path}'", spec_content)
-        else:
-            new_spec_content = spec_content
-        if new_spec_content != spec_content:
-            with open(spec_path, 'w', encoding='utf-8') as f:
-                f.write(new_spec_content)
-            print(f"✅ app.spec icon 경로를 {icon_path}로 수정했습니다.")
-        else:
-            print("ℹ️  app.spec icon 경로가 이미 설정되어 있거나 변경 사항이 없습니다.")
-    else:
-        print("❌ app.spec 파일을 찾을 수 없습니다. 아이콘 경로를 수정하지 못했습니다.")
 
-    # app.spec에 hiddenimports 보강 (spec 사용 시 --hidden-import 불가)
-    try:
-        import re
-        with open(spec_path, 'r', encoding='utf-8') as f:
-            spec_text = f.read()
-
-        want_hidden = ['numpy.f2py', 'numpy.linalg.lapack_lite', 'scipy._lib.array_api_compat']
-        changed = False
-
-        m = re.search(r"hiddenimports\s*=\s*\[([^\]]*)\]", spec_text, re.S)
-        if m:
-            inside = m.group(1)
-            # 현재 목록 파싱
-            existing = []
-            for part in inside.split(','):
-                s = part.strip().strip('\'"')
-                if s:
-                    existing.append(s)
-            for mod in want_hidden:
-                if mod not in existing:
-                    existing.append(mod)
-                    changed = True
-            new_inside = ', '.join([f"'{x}'" for x in existing])
-            spec_text = spec_text[:m.start(1)] + new_inside + spec_text[m.end(1):]
-        else:
-            # Analysis( ... ) 내에 hiddenimports 파라미터 삽입
-            spec_text_new = re.sub(r"Analysis\(",
-                                   "Analysis(hiddenimports=['numpy.f2py','numpy.linalg.lapack_lite','scipy._lib.array_api_compat'], ",
-                                   spec_text,
-                                   count=1)
-            if spec_text_new != spec_text:
-                spec_text = spec_text_new
-                changed = True
-
-        if changed:
-            with open(spec_path, 'w', encoding='utf-8') as f:
-                f.write(spec_text)
-            print("✅ app.spec hiddenimports 보강 완료")
-    except Exception as e:
-        print(f"⚠️ app.spec hiddenimports 수정 중 오류: {e}")
-
-    # PyInstaller 명령 실행 (spec 파일 사용 1차 시도)
-    cmd = [
-        sys.executable, '-m', 'PyInstaller',
-        '--clean',  # 빌드 캐시 정리
-        '--noconfirm',  # 기존 파일 덮어쓰기
-        '--log-level=WARN',  # 로그 레벨 설정
-        'app.spec'
+def build_command(mode: str) -> list[str]:
+    """app.spec를 변형하지 않고 명시적인 PyInstaller 명령을 생성합니다."""
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--clean",
+        "--noconfirm",
+        "--windowed",
+        "--name",
+        APP_NAME,
+        "--distpath",
+        str(DIST_DIR),
+        "--workpath",
+        str(BUILD_DIR),
     ]
+    command.append("--onefile" if mode == "onefile" else "--onedir")
 
-    start_time = time.time()
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    end_time = time.time()
+    icon = pick_existing_icon_path()
+    if icon:
+        command.extend(["--icon", str(icon)])
 
-    if result.returncode == 0:
-        print(f"✅ Build completed successfully in {end_time - start_time:.2f} seconds")
-        # 실행 파일 크기 확인 (dist 내 첫 번째 .exe 탐색)
-        exe_path = find_built_executable()
-        if exe_path and os.path.exists(exe_path):
-            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-            print(f"📦 Executable size: {size_mb:.1f} MB ({exe_path})")
-        return True
-    else:
-        print("❌ Build failed with spec!")
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
+    command.extend(["--add-data", data_argument(PROJECT_ROOT / "templates", "templates")])
+    command.extend(["--add-data", data_argument(PROJECT_ROOT / "static", "static")])
 
-        # spec이 손상되었을 수 있으므로 백업 복원
-        try:
-            if os.path.exists('app.spec.backup'):
-                shutil.copy2('app.spec.backup', 'app.spec')
-                print("ℹ️  Restored app.spec from backup")
-        except Exception as e:
-            print(f"⚠️ Failed to restore app.spec: {e}")
+    # app.py가 직접 import하지 않는 backend 분기와 SciPy/h5py의
+    # 플랫폼별 모듈까지 명시적으로 포함합니다.
+    command.extend(["--collect-submodules", "backend"])
+    for package in COLLECT_ALL_PACKAGES:
+        command.extend(["--collect-all", package])
+    for module in HIDDEN_IMPORTS:
+        command.extend(["--hidden-import", module])
 
-        # Fallback: spec 없이 onefile 빌드 (모든 자원/히든임포트 포함)
-        icon_path = pick_existing_icon_path() or ''
-        add_data = [
-            'templates;templates',
-            'static;static',
-        ]
-        hidden_imports = [
-            'numpy.f2py',
-            'numpy.linalg.lapack_lite',
-            'scipy._lib.array_api_compat',
-        ]
-        cmd2 = [
-            sys.executable, '-m', 'PyInstaller',
-            '--clean', '--noconfirm', '--log-level=WARN',
-            '--windowed', '--name', 'WaveLab_V2.8',
-        ]
-        if icon_path:
-            cmd2.extend(['--icon', icon_path])
-        for d in add_data:
-            cmd2.extend(['--add-data', d])
-        for h in hidden_imports:
-            cmd2.extend(['--hidden-import', h])
-        cmd2.append('app.py')
+    command.append(str(PROJECT_ROOT / "app.py"))
+    return command
 
-        print('ℹ️  Trying fallback build without spec...')
-        start_time = time.time()
-        result2 = subprocess.run(cmd2, capture_output=True, text=True)
-        end_time = time.time()
 
-        if result2.returncode == 0:
-            print(f"✅ Fallback build completed successfully in {end_time - start_time:.2f} seconds")
-            exe_path = find_built_executable()
-            if exe_path and os.path.exists(exe_path):
-                size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-                print(f"📦 Executable size: {size_mb:.1f} MB ({exe_path})")
-            return True
-        else:
-            print("❌ Fallback build failed!")
-            print("STDOUT:", result2.stdout)
-            print("STDERR:", result2.stderr)
-            return False
+def build_executable(mode: str) -> bool:
+    """선택된 모드로 PyInstaller를 실행합니다."""
+    command = build_command(mode)
+    print(f"Building {mode} executable...")
+    print(" ".join(command))
 
-def verify_build_output():
-    """빌드 결과물을 검증합니다."""
-    print("Verifying build output...")
-
-    dist_dir = Path('dist')
-    exe_path = find_built_executable()
-
-    if not exe_path or not os.path.exists(exe_path):
-        print("❌ Executable not found in dist/ directory!")
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if result.stdout:
+        print(result.stdout)
+    if result.returncode != 0:
+        print("❌ PyInstaller build failed")
+        if result.stderr:
+            print(result.stderr)
         return False
 
-    # 폴더 모드에서는 dist/ 내의 메인 폴더를 검사
-    build_folder = Path(exe_path).parent
-    if not build_folder.is_dir():
-        print(f"❌ Build folder not found: {build_folder}")
-        return False
-
-    # 전체 빌드 폴더 크기 확인
-    total_size = sum(f.stat().st_size for f in build_folder.glob('**/*') if f.is_file())
-    size_mb = total_size / (1024 * 1024)
-    
-    # 폴더 빌드에서는 실행 파일 자체는 작으므로 전체 크기를 확인
-    if size_mb < 50:  # 최소 50MB 이상이어야 함
-        print(f"❌ Total build size is too small: {size_mb:.1f} MB (expected >50MB)")
-        return False
-
-    # 폴더 내 파일 수 확인
-    file_count = len(list(build_folder.glob('**/*')))
-    if file_count < 10: # 최소 10개 이상의 파일이 있어야 함 (exe, dlls, etc.)
-        print(f"❌ Not enough files in build folder: {file_count} (expected >10)")
-        return False
-
-    print(f"✅ Build directory verified: {size_mb:.1f} MB with {file_count} files.")
-    print("✅ Dependencies are bundled in the build directory.")
-    
+    print("✅ PyInstaller build completed")
     return True
 
-def test_executable():
-    """빌드된 실행 파일을 테스트합니다."""
-    print("Testing executable...")
-    
-    exe_path = find_built_executable()
-    if not exe_path or not os.path.exists(exe_path):
-        print("❌ Executable not found!")
-        return False
-    
+
+def verify_build_output(mode: str) -> tuple[bool, Path | None]:
+    """one-file과 one-dir의 출력 구조를 구분하여 검증합니다."""
+    executable = find_built_executable()
+    if executable is None:
+        print("❌ WaveLab.exe was not found in dist/")
+        return False, None
+
+    size_mb = executable.stat().st_size / (1024 * 1024)
+    if size_mb < 1:
+        print(f"❌ Executable is unexpectedly small: {size_mb:.1f} MB")
+        return False, executable
+
+    if mode == "onedir":
+        bundle_root = executable.parent
+        required_bundle_files = (
+            bundle_root / "templates/index.html",
+            bundle_root / "static/css/styles.css",
+            bundle_root / "static/js/uPlot.iife.min.js",
+            bundle_root / "static/fonts/DancingScript-Regular.ttf",
+        )
+        missing = [rel_path(path) for path in required_bundle_files if not path.is_file()]
+        if missing:
+            print("❌ Bundled resource checks failed:")
+            for path in missing:
+                print(f"   - {path}")
+            return False, executable
+
+        file_count = sum(1 for path in bundle_root.rglob("*") if path.is_file())
+        print(
+            f"✅ onedir bundle: {size_mb:.1f} MB executable, "
+            f"{file_count} files including templates/static"
+        )
+    else:
+        # one-file는 데이터가 _MEIPASS에 압축되어 들어가므로 dist 폴더에
+        # templates/static 파일이 보이지 않는 것이 정상입니다.
+        print(f"✅ onefile executable: {size_mb:.1f} MB ({executable})")
+
+    return True, executable
+
+
+def test_executable(executable: Path, timeout: float = 20.0) -> bool:
+    """프로세스를 시작하고 Flask 루트가 HTTP 200을 반환하는지 확인합니다."""
+    print("Testing executable startup and local HTTP endpoint...")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    process = None
+
     try:
-        # 실행 파일 시작 (10초 후 종료)
-        print("Starting executable for testing...")
-        process = subprocess.Popen([exe_path], 
-                                 stdout=subprocess.PIPE, 
-                                 stderr=subprocess.PIPE)
-        
-        print("✅ Executable started successfully")
-        
-        # 10초 대기 후 종료
-        time.sleep(10)
-        process.terminate()
-        
-        try:
-            process.wait(timeout=15)
-            print("✅ Executable terminated successfully")
-            return True
-        except subprocess.TimeoutExpired:
-            process.kill()
-            print("⚠️ Executable force killed (may be normal if server is running)")
-            return True  # 서버가 계속 실행되는 것은 정상
-            
-    except Exception as e:
-        print(f"❌ Error testing executable: {e}")
+        process = subprocess.Popen(
+            [str(executable)],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                print(f"❌ Executable exited early with code {process.returncode}")
+                return False
+
+            try:
+                with urllib.request.urlopen(SERVER_URL, timeout=1.0) as response:
+                    if response.status == 200:
+                        print("✅ Local Flask endpoint returned HTTP 200")
+                        return True
+            except (urllib.error.URLError, TimeoutError, OSError):
+                pass
+            time.sleep(0.25)
+
+        print(f"❌ Timed out waiting for {SERVER_URL}")
         return False
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
-def create_offline_checklist():
-    """오프라인 환경 체크리스트를 생성합니다."""
-    print("Creating offline environment checklist...")
-    
-    checklist = {
-        "offline_requirements": [
-            "✅ All Python dependencies included in executable (no network)",
-            "✅ Static files (CSS, JS, fonts) included",
-            "✅ Templates included",
-            "✅ Backend modules included",
-            "✅ No external network dependencies",
-            "✅ No Google Fonts (using local fonts)",
-            "✅ No CDN resources",
-            "✅ Self-contained executable"
-        ],
-        "test_scenarios": [
-            "✅ Executable runs without internet connection",
-            "✅ All UI elements display correctly",
-            "✅ Fonts load properly",
-            "✅ File upload functionality works",
-            "✅ Data processing works",
-            "✅ Charts render correctly"
-        ]
+
+def create_offline_checklist(
+    mode: str,
+    executable: Path,
+    runtime_test_passed: bool | None,
+) -> Path:
+    """빌드 결과와 자동 검증 결과를 JSON으로 기록합니다."""
+    checklist_path = DIST_DIR / "offline_checklist.json"
+    monaco_loader = (
+        PROJECT_ROOT
+        / "static/js/monaco-editor/v0.52.2/min/vs/loader.js"
+    )
+    payload = {
+        "application": APP_NAME,
+        "build_mode": mode,
+        "executable": str(executable),
+        "static_assets_bundled": True,
+        "templates_bundled": True,
+        "fonts_bundled": True,
+        "monaco_full_tree_detected": monaco_loader.is_file(),
+        "database_location": "data/timeseries.db beside the executable",
+        "upload_location": "uploads/ beside the executable",
+        "runtime_http_200_test": runtime_test_passed,
+        "manual_offline_tests_required": True,
     }
-    
-    with open('dist/offline_checklist.json', 'w', encoding='utf-8') as f:
-        json.dump(checklist, f, indent=2, ensure_ascii=False)
-    
-    print("✅ Offline checklist created: dist/offline_checklist.json")
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    checklist_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"✅ Offline checklist: {checklist_path}")
+    return checklist_path
 
-def main():
-    """메인 빌드 프로세스"""
-    print("=== WaveLab Optimized Build Script (Offline-Ready) ===")
-    print()
-    
-    # 1. 요구사항 확인
-    if not check_requirements():
-        print("❌ Requirements check failed! Exiting...")
-        sys.exit(1)
-    
-    if not check_python_dependencies():
-        print("❌ Python dependencies check failed! Exiting...")
-        sys.exit(1)
-    
-    # 2. spec 파일 검증
-    if not verify_spec_file():
-        print("❌ app.spec verification failed! Exiting...")
-        sys.exit(1)
-    
-    # 3. 빌드 정리
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build WaveLab for offline Windows deployment."
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("onefile", "onedir"),
+        default="onefile",
+        help="onefile is the portable single EXE; onedir is easier to diagnose.",
+    )
+    parser.add_argument(
+        "--skip-runtime-test",
+        action="store_true",
+        help="Skip launching the EXE and probing http://127.0.0.1:9840/.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    os.chdir(PROJECT_ROOT)
+
+    print(f"=== WaveLab offline build ({args.mode}) ===")
+    if not check_requirements() or not check_python_dependencies():
+        return 1
+
     clean_build()
-    
-    # 4. 실행 파일 빌드
-    if not build_executable():
-        print("❌ Build failed! Exiting...")
-        sys.exit(1)
-    
-    # 5. 빌드 결과물 검증
-    if not verify_build_output():
-        print("❌ Build output verification failed! Exiting...")
-        sys.exit(1)
-    
-    # 6. 실행 파일 테스트
-    if not test_executable():
-        print("⚠️ Executable test failed, but build may still be valid")
-    
-    # 7. 오프라인 체크리스트 생성
-    create_offline_checklist()
-    
-    print()
-    print("=== 🎉 Build completed successfully! ===")
-    print("📁 Optimized executable: dist/WaveLab_V2.8.exe")
-    print("📋 Offline checklist: dist/offline_checklist.json")
-    print()
-    print("🔍 The executable is now ready for offline deployment!")
-    print("   - All dependencies included")
-    print("   - No external network requirements")
-    print("   - Self-contained and portable")
+    if not build_executable(args.mode):
+        return 1
 
-if __name__ == '__main__':
-    main() 
+    output_ok, executable = verify_build_output(args.mode)
+    if not output_ok or executable is None:
+        return 1
+
+    runtime_test_passed: bool | None = None
+    if not args.skip_runtime_test:
+        runtime_test_passed = test_executable(executable)
+        if not runtime_test_passed:
+            print("⚠️ Runtime smoke test failed; inspect the generated logs before deployment.")
+
+    create_offline_checklist(args.mode, executable, runtime_test_passed)
+    print("=== Build finished ===")
+    print(f"Executable: {executable}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
