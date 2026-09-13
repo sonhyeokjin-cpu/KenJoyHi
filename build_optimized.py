@@ -273,6 +273,15 @@ def build_executable(mode: str) -> bool:
     return True
 
 
+def resolve_bundle_resource(bundle_root: Path, relative_path: str) -> Path | None:
+    """PyInstaller 6 onedir의 기본 _internal 경로까지 고려합니다."""
+    candidates = (
+        bundle_root / relative_path,
+        bundle_root / "_internal" / relative_path,
+    )
+    return next((path for path in candidates if path.is_file()), None)
+
+
 def verify_build_output(mode: str) -> tuple[bool, Path | None]:
     """one-file과 one-dir의 출력 구조를 구분하여 검증합니다."""
     executable = find_built_executable()
@@ -288,16 +297,20 @@ def verify_build_output(mode: str) -> tuple[bool, Path | None]:
     if mode == "onedir":
         bundle_root = executable.parent
         required_bundle_files = (
-            bundle_root / "templates/index.html",
-            bundle_root / "static/css/styles.css",
-            bundle_root / "static/js/uPlot.iife.min.js",
-            bundle_root / "static/fonts/DancingScript-Regular.ttf",
+            "templates/index.html",
+            "static/css/styles.css",
+            "static/js/uPlot.iife.min.js",
+            "static/fonts/DancingScript-Regular.ttf",
         )
-        missing = [rel_path(path) for path in required_bundle_files if not path.is_file()]
+        missing = [
+            relative_path
+            for relative_path in required_bundle_files
+            if resolve_bundle_resource(bundle_root, relative_path) is None
+        ]
         if missing:
             print("❌ Bundled resource checks failed:")
             for path in missing:
-                print(f"   - {path}")
+                print(f"   - {path} (or _internal/{path})")
             return False, executable
 
         file_count = sum(1 for path in bundle_root.rglob("*") if path.is_file())
