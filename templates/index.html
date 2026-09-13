@@ -1056,59 +1056,9 @@
             </div>
             <div class="loading-visual" aria-hidden="true">
                 <div class="loading-reticle"></div>
-                <svg class="helicopter" viewBox="0 0 760 300" role="img" aria-label="틸트로터 공격헬기 실루엣">
-                    <g class="heli-trace">
-                        <path d="M54 78H274 M486 78H706"></path>
-                        <path d="M68 236H692"></path>
-                        <path d="M118 218H182 M580 218H642"></path>
-                    </g>
-                    <g class="heli-fill">
-                        <!-- central fuselage and cockpit -->
-                        <path d="M132 173c13-30 44-48 87-50l75-2c26 0 49 7 70 21l101 4 56-19 48 2-19 17-66 27-92 13H204c-31 0-56-4-72-13z"></path>
-                        <path d="M180 162c13-25 34-35 63-37l34 1-19 36z"></path>
-                        <!-- broad wing and rear tail boom -->
-                        <path d="M232 139L500 137 575 165 185 165z"></path>
-                        <path d="M478 151l136-43 76 4-20 18-127 46z"></path>
-                        <path d="M584 173l102 39-29 7-112-30z"></path>
-                        <path d="M603 161l106-43 35 6-77 54z"></path>
-                        <!-- twin engine nacelles -->
-                        <path d="M205 105c11-14 35-18 55-10l21 11-6 34-62-1-17-14z"></path>
-                        <path d="M475 105c11-14 35-18 55-10l21 11-6 34-62-1-17-14z"></path>
-                        <!-- rotor masts -->
-                        <path d="M230 105l-5-31h18l8 31z"></path>
-                        <path d="M500 105l-5-31h18l8 31z"></path>
-                        <!-- landing gear -->
-                        <path d="M220 179l-7 31h12l13-31z"></path>
-                        <path d="M516 181l8 29h12l-8-32z"></path>
-                        <path d="M205 210h31 M513 210h31"></path>
-                    </g>
-                    <g class="heli-detail">
-                        <!-- rotor discs / blades -->
-                        <g class="rotor-disc">
-                            <path d="M104 73H366"></path>
-                            <path d="M235 28V119"></path>
-                            <path d="M139 39l190 68"></path>
-                            <path d="M331 39L141 107"></path>
-                        </g>
-                        <g class="rotor-disc">
-                            <path d="M374 73H636"></path>
-                            <path d="M505 28V119"></path>
-                            <path d="M409 39l190 68"></path>
-                            <path d="M601 39l-190 68"></path>
-                        </g>
-                        <!-- cockpit glazing, intake and airframe details -->
-                        <path d="M148 170c17-21 38-33 66-38l35 1-19 34-82 8z"></path>
-                        <path d="M179 157l35 1 M203 138l-7 30"></path>
-                        <path d="M287 139h48 M352 139h42 M416 139h42"></path>
-                        <path d="M282 165v18 M315 165v18 M348 165v18"></path>
-                        <path d="M560 153l54-17 M583 169l76-20"></path>
-                        <path d="M206 188h329"></path>
-                        <circle cx="234" cy="120" r="7"></circle>
-                        <circle cx="504" cy="120" r="7"></circle>
-                        <circle cx="188" cy="210" r="5"></circle>
-                        <circle cx="535" cy="210" r="5"></circle>
-                    </g>
-                </svg>
+                <img class="helicopter helicopter-image"
+                     src="{{ url_for('static', filename='images/wavelab_tiltrotor.svg') }}"
+                     alt="WaveLab 틸트로터 항공기 실루엣">
             </div>
             <div class="loading-brand" aria-label="WaveLab">
                 <span class="brand-wave">WAVE</span>
