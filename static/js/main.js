@@ -1826,12 +1826,22 @@ function buildPlotData(chart, timeData, valueData) {
 function renderChartData(chart, parameterList, datasets, range = null) {
     const normalizedDatasets = datasets.map(normalizeTimeSeries);
     const requestedRange = validTimeRange(range?.min, range?.max);
+    const sourceRange = datasetRange({
+        time: buildSharedTimeAxis(normalizedDatasets)
+    });
+    const sourceSpan = sourceRange ? sourceRange.max - sourceRange.min : 0;
+    const rangeTolerance = Math.max(1e-9, Math.abs(sourceSpan) * 1e-9);
+    const coversAllSamples = Boolean(sourceRange && requestedRange &&
+        requestedRange.min <= sourceRange.min + rangeTolerance &&
+        requestedRange.max >= sourceRange.max - rangeTolerance);
 
-    // A full-range reset trims only the non-overlapping endpoints for the
-    // normal case, while datasetForRender() preserves a channel whose clock
-    // does not overlap the requested range (legacy/absolute timestamp data).
-    const isFullRange = Boolean(requestedRange && chart.initialScale &&
-        sameRange(requestedRange, chart.initialScale));
+    // Do not rely only on chart.initialScale: it can still contain the first
+    // channel's range when a second channel starts later. A request covering
+    // the actual union of all samples is also a full-range reset.
+    const isFullRange = Boolean(requestedRange && (
+        coversAllSamples ||
+        (chart.initialScale && sameRange(requestedRange, chart.initialScale))
+    ));
     const interiorRange = parameterList.length > 1 && isFullRange
         ? commonInteriorRange(normalizedDatasets)
         : null;
