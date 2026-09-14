@@ -7,7 +7,6 @@ import sys
 import traceback
 import stat
 import threading
-import time
 
 # 로깅 설정
 logging.basicConfig(
@@ -433,50 +432,50 @@ def clear_time_segments():
         if conn:
             conn.close()
 
-def _remove_database_files(max_attempts=5, retry_delay=0.2):
-    """Remove the SQLite database and its sidecar files, or fail explicitly."""
-    database_files = (DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm", f"{DB_PATH}-journal")
-    last_error = None
-
-    for attempt in range(1, max_attempts + 1):
-        last_error = None
-        for path in database_files:
-            if not os.path.exists(path):
-                continue
-            try:
-                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
-                os.remove(path)
-                logger.info(f"Removed database file: {path}")
-            except OSError as exc:
-                last_error = exc
-                logger.warning(
-                    f"Database file is still in use ({attempt}/{max_attempts}): "
-                    f"{path}: {exc}"
-                )
-
-        remaining = [path for path in database_files if os.path.exists(path)]
-        if not remaining:
-            return
-
-        if attempt < max_attempts:
-            time.sleep(retry_delay)
-
-    remaining_text = ", ".join(path for path in database_files if os.path.exists(path))
-    raise PermissionError(
-        f"Could not remove the existing database. Close operations using it: "
-        f"{remaining_text}"
-    ) from last_error
+def _drop_application_tables():
+    """Drop every application table without deleting the SQLite file itself."""
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    try:
+        # Windows does not allow deleting an open SQLite file. An exclusive
+        # transaction gives the upload reset the same clean-state semantics
+        # while allowing this process to keep using the database path.
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN EXCLUSIVE")
+        table_names = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """
+            )
+        ]
+        for table_name in table_names:
+            quoted_name = table_name.replace('"', '""')
+            conn.execute(f'DROP TABLE IF EXISTS "{quoted_name}"')
+        conn.commit()
+        logger.info(
+            "Dropped %d application tables during database reset",
+            len(table_names),
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def reset_database():
-    """Delete the current database completely and create a new empty database."""
+    """Reset all persisted session data and recreate an empty database schema."""
     global _db_initialized
 
     with _database_reset_lock:
         try:
-            logger.info("Resetting database completely...")
+            logger.info("Resetting database contents completely...")
+            ensure_data_directory()
             _db_initialized = False
-            _remove_database_files()
+            _drop_application_tables()
             init_db()
 
             # A reset must never silently retain parameters from the previous file.
