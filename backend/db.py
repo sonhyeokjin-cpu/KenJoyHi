@@ -455,9 +455,19 @@ def _drop_application_tables():
             quoted_name = table_name.replace('"', '""')
             conn.execute(f'DROP TABLE IF EXISTS "{quoted_name}"')
         conn.commit()
+
+        # DROP releases pages for reuse but does not reduce the database file.
+        # VACUUM rebuilds the now-empty file so a new upload does not inherit
+        # the previous dataset's on-disk size.
+        size_before_vacuum = os.path.getsize(DB_PATH)
+        conn.execute("VACUUM")
+        size_after_vacuum = os.path.getsize(DB_PATH)
         logger.info(
-            "Dropped %d application tables during database reset",
+            "Dropped %d application tables and compacted the database "
+            "from %d to %d bytes",
             len(table_names),
+            size_before_vacuum,
+            size_after_vacuum,
         )
     except Exception:
         conn.rollback()
