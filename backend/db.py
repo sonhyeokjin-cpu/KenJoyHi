@@ -435,7 +435,7 @@ def clear_time_segments():
 
 def _remove_database_files(max_attempts=5, retry_delay=0.2):
     """Remove the SQLite database and its sidecar files, or fail explicitly."""
-    database_files = (DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm")
+    database_files = (DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm", f"{DB_PATH}-journal")
     last_error = None
 
     for attempt in range(1, max_attempts + 1):
