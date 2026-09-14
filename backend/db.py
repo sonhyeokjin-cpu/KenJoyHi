@@ -6,6 +6,8 @@ import atexit
 import sys
 import traceback
 import stat
+import threading
+import time
 
 # 로깅 설정
 logging.basicConfig(
@@ -31,6 +33,7 @@ logger.info(f"Database path set to: {DB_PATH}")
 
 # 데이터베이스 초기화 상태 추적
 _db_initialized = False
+_database_reset_lock = threading.RLock()
 
 def ensure_data_directory():
     """데이터 디렉토리가 존재하는지 확인하고 생성"""
@@ -430,35 +433,69 @@ def clear_time_segments():
         if conn:
             conn.close()
 
-def reset_database():
-    """
-    Completely reset the database - delete all data and reinitialize
-    """
-    global _db_initialized
-    try:
-        logger.info("Resetting database completely...")
-        
-        # Close any existing connections
-        if os.path.exists(DB_PATH):
+def _remove_database_files(max_attempts=5, retry_delay=0.2):
+    """Remove the SQLite database and its sidecar files, or fail explicitly."""
+    database_files = (DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm", f"{DB_PATH}-journal")
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        last_error = None
+        for path in database_files:
+            if not os.path.exists(path):
+                continue
             try:
-                os.chmod(DB_PATH, stat.S_IWRITE | stat.S_IREAD)
-                os.remove(DB_PATH)
-                logger.info("Existing database file removed for reset")
-            except Exception as e:
-                logger.error(f"Error removing existing database file: {str(e)}")
-                logger.error(traceback.format_exc())
-        
-        # Reset initialization flag
-        _db_initialized = False
-        
-        # Reinitialize database
-        init_db()
-        logger.info("Database reset completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Error resetting database: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                os.remove(path)
+                logger.info(f"Removed database file: {path}")
+            except OSError as exc:
+                last_error = exc
+                logger.warning(
+                    f"Database file is still in use ({attempt}/{max_attempts}): "
+                    f"{path}: {exc}"
+                )
+
+        remaining = [path for path in database_files if os.path.exists(path)]
+        if not remaining:
+            return
+
+        if attempt < max_attempts:
+            time.sleep(retry_delay)
+
+    remaining_text = ", ".join(path for path in database_files if os.path.exists(path))
+    raise PermissionError(
+        f"Could not remove the existing database. Close operations using it: "
+        f"{remaining_text}"
+    ) from last_error
+
+
+def reset_database():
+    """Delete the current database completely and create a new empty database."""
+    global _db_initialized
+
+    with _database_reset_lock:
+        try:
+            logger.info("Resetting database completely...")
+            _db_initialized = False
+            _remove_database_files()
+            init_db()
+
+            # A reset must never silently retain parameters from the previous file.
+            with sqlite3.connect(DB_PATH) as conn:
+                parameter_count = conn.execute(
+                    "SELECT COUNT(*) FROM parameters"
+                ).fetchone()[0]
+            if parameter_count != 0:
+                raise RuntimeError(
+                    f"Database reset verification failed: "
+                    f"{parameter_count} parameters remain"
+                )
+
+            logger.info("Database reset completed and verified")
+            return True
+        except Exception as e:
+            logger.error(f"Error resetting database: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
 
 def save_chart_layout(charts_info):
     """

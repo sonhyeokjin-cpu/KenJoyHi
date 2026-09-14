@@ -410,6 +410,13 @@ def upload_file():
             except Exception as e:
                 logger.error(f"Error processing file: {str(e)}")
                 logger.error(traceback.format_exc())
+                # 일부 파라미터만 저장된 불완전한 DB를 다음 업로드에 남기지 않는다.
+                try:
+                    db_module['reset_database']()
+                    logger.info("Removed partially imported database after processing failure")
+                except Exception:
+                    logger.error("Failed to clean partial database after processing failure")
+                    logger.error(traceback.format_exc())
                 return jsonify({'error': f'Error processing file: {str(e)}'}), 500
             
             # Time segments 초기화
@@ -440,6 +447,7 @@ def upload_file():
                 parameters = db_module['get_parameters']()
                 if not parameters:
                     logger.warning("No parameters found after processing file")
+                    db_module['reset_database']()
                     return jsonify({'error': 'No parameters found in processed file'}), 500
                     
                 logger.info(f"Successfully processed file with parameters: {parameters}")
