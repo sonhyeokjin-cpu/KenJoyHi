@@ -148,6 +148,36 @@ def channel_writer(path, name):
         conn.close()
 
 
+@contextmanager
+def channel_writers(path, names):
+    """Write multiple channels through one SQLite connection and transaction."""
+    unique_names = list(dict.fromkeys(names))
+    if len(unique_names) != len(names):
+        raise ValueError('Channel names must be unique')
+
+    conn = sqlite3.connect(path)
+    writers = {}
+    try:
+        ensure_schema(conn)
+        conn.execute('BEGIN IMMEDIATE')
+        writers = {name: ChannelWriter(conn, name) for name in unique_names}
+        yield writers
+        for writer in writers.values():
+            if writer.count:
+                writer.finish()
+            else:
+                # Do not leave metadata-only parameters for empty CSV columns.
+                for table in ('channel_chunks', 'channel_meta', 'timeseries'):
+                    conn.execute(f'DELETE FROM {table} WHERE parameter_id=?', (writer.pid,))
+                conn.execute('DELETE FROM parameters WHERE id=?', (writer.pid,))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def metadata(path, name):
     with sqlite3.connect(path) as conn:
         ensure_schema(conn)
