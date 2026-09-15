@@ -2852,11 +2852,137 @@ th {
     box-sizing: border-box;
     padding: 14px 16px 18px;
     background: #ffffff;
-    overflow: hidden;
+    overflow: auto;
 }
 
 #fft-chart > .uplot {
     margin: 0 auto;
+}
+
+#fft-chart .u-legend {
+    padding-bottom: 8px;
+}
+
+/* BIT Extractor: match the dark instrument-panel visual language of the app. */
+#bit-extractor-popup {
+    background: rgba(3, 9, 18, 0.76);
+    backdrop-filter: blur(3px);
+}
+
+#bit-extractor-popup .bit-extractor-modal {
+    width: min(760px, 94vw);
+    max-width: 760px;
+    max-height: 92vh;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--shell-border);
+    border-radius: 10px;
+    background: var(--shell-panel);
+    color: #dce8f4;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+}
+
+#bit-extractor-popup .bit-extractor-header {
+    margin: 0;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--shell-border);
+    background: #0d1929;
+}
+
+#bit-extractor-popup .bit-extractor-header h3,
+#bit-extractor-popup .bit-extractor-header .close-btn {
+    color: #e8f1fa;
+}
+
+#bit-extractor-popup .bit-extractor-body {
+    max-height: calc(92vh - 62px);
+    padding: 20px;
+    overflow-y: auto;
+}
+
+#bit-extractor-popup .form-group { margin-bottom: 15px; }
+
+#bit-extractor-popup .form-group > label {
+    display: block;
+    margin-bottom: 7px;
+    color: #92a8bf;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+}
+
+#bit-extractor-popup input[type="number"],
+#bit-extractor-popup input[type="text"],
+#bit-extractor-popup select {
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid #30445c;
+    border-radius: var(--radius-sm);
+    outline: none;
+    background: #0d1726;
+    color: #e8f1fa;
+    font: 500 12px/1 Consolas, 'Courier New', monospace;
+}
+
+#bit-extractor-popup input:focus,
+#bit-extractor-popup select:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
+}
+
+#bit-extractor-popup .parameter-selection-list {
+    max-height: 170px;
+    border-color: #2b3e55;
+    background: #0d1726;
+}
+
+#bit-extractor-popup .parameter-selection-item {
+    border-color: #283b52;
+    background: #142237;
+}
+
+#bit-extractor-popup .parameter-selection-item:hover {
+    border-color: #2387b5;
+    background: #172b43;
+}
+
+#bit-extractor-popup .parameter-selection-item label,
+#bit-extractor-popup .radio-label { color: #c7d5e3; }
+
+.bit-field-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+#bit-extractor-popup .bit-field-row input {
+    width: 76px;
+    flex: 0 0 76px;
+}
+
+.bit-field-help {
+    color: #7f96ad;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+#bit-extractor-popup .form-actions { border-color: #2a3d54; }
+
+.bit-tip-emphasis {
+    color: #55c6f3;
+    font-weight: 600;
+}
+
+.bit-tip-panel {
+    margin-top: 15px;
+    padding: 11px 12px;
+    border: 1px solid #29425c;
+    border-left: 3px solid var(--accent-color);
+    border-radius: var(--radius-sm);
+    background: rgba(56, 189, 248, 0.055);
+    color: #91a7bd;
+    font-size: 12px;
+    line-height: 1.55;
 }
 
 /* Derived-parameter engineering panel ------------------------------------- */
@@ -2991,4 +3117,3 @@ th {
 #derived-panel .resize-handle:hover {
     background: #38bdf8;
 }
-

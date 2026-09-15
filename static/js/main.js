@@ -2387,9 +2387,12 @@ function createFFTChart(frequencies, magnitudes, parameter) {
         const style = getComputedStyle(fftChartElement);
         const horizontalPadding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0);
         const verticalPadding = parseFloat(style.paddingTop || 0) + parseFloat(style.paddingBottom || 0);
+        // uPlot adds its title/legend around the plotting canvas. Reserve that
+        // chrome so axis labels and live legend values stay inside the modal.
+        const titleAndLegendHeight = 76;
         return {
             width: Math.max(320, fftChartElement.clientWidth - horizontalPadding),
-            height: Math.max(180, fftChartElement.clientHeight - verticalPadding)
+            height: Math.max(180, fftChartElement.clientHeight - verticalPadding - titleAndLegendHeight)
         };
     };
     const initialSize = getPlotSize();
@@ -2422,15 +2425,15 @@ function createFFTChart(frequencies, magnitudes, parameter) {
                 value: (u, v) => v == null ? "-" : v.toFixed(2),
             },
         ],
-        padding: [10, 10, 10, 10],
+        padding: [12, 20, 18, 14],
         axes: [
             {
                 stroke: '#000',
                 grid: { show: true },
                 ticks: { show: true },
-                size: 30,
-                label: '',
-                labelSize: 20,
+                size: 52,
+                label: 'Frequency (Hz)',
+                labelSize: 18,
                 labelGap: 0,
                 labelOffset: 0,
                 labelFont: '12px Arial',
@@ -2439,9 +2442,9 @@ function createFFTChart(frequencies, magnitudes, parameter) {
                 stroke: '#000',
                 grid: { show: true },
                 ticks: { show: true },
-                size: 30,
-                label: '',
-                labelSize: 20,
+                size: 62,
+                label: 'Magnitude',
+                labelSize: 18,
                 labelGap: 0,
                 labelOffset: 0,
                 labelFont: '12px Arial',
@@ -3233,19 +3236,25 @@ applyScaleBtn?.addEventListener('click', async () => {
     applyScaleBtn.disabled = true;
 
     try {
-        // Populated charts are synchronized and, only when necessary, reloaded.
-        // Empty charts still receive the same shared X range.
-        charts.filter(chart => !chart.parameters?.length)
-            .forEach(chart => setChartXRange(chart, requestedRange));
+        const applyScalePass = () => {
+            charts.forEach(chart => setChartXRange(chart, requestedRange));
+            selectedChartIds.forEach(chartId => {
+                const chart = charts.find(item => item.id === chartId);
+                chart?.plot?.setScale('y', requestedYRange);
+            });
+        };
+
+        // First pass updates both axes immediately.
+        applyScalePass();
+
+        // Populated charts are synchronized and reloaded only when necessary.
         await synchronizeChartRange(requestedRange);
+        await new Promise(resolve => requestAnimationFrame(resolve));
 
-        // Data reload may auto-scale Y, so apply the requested Y range last.
-        selectedChartIds.forEach(chartId => {
-            const chart = charts.find(item => item.id === chartId);
-            chart?.plot?.setScale('y', requestedYRange);
-        });
+        // A reload can auto-scale Y, so the second pass fixes X/Y together.
+        applyScalePass();
 
-        showNotification('X/Y scales applied together.');
+        showNotification('Scale applied twice to synchronize X and Y.');
     } catch (error) {
         console.error('Error applying chart scale:', error);
         showNotification(`Scale 적용 오류: ${error.message}`, 'error');
@@ -3634,7 +3643,7 @@ function showBitExtractorPopup() {
     const paramListDiv = document.getElementById('bit-parameter-selection-list');
     const lsbInput = document.getElementById('bit-lsb');
     const msbInput = document.getElementById('bit-msb');
-    const signInput = document.getElementById('bit-sign');
+    const signedSelect = document.getElementById('bit-signed');
     const lsbScaleInput = document.getElementById('bit-lsb-scale');
     const formatRadios = document.getElementsByName('bit-data-format');
     const paramNameInput = document.getElementById('bit-parameter-name');
@@ -3692,12 +3701,12 @@ function showBitExtractorPopup() {
     function updateBitIndexRange() {
         const format = Array.from(formatRadios).find(r=>r.checked).value;
         let min = 0, max = (format === '32bit') ? 31 : 15;
-        lsbInput.min = msbInput.min = signInput.min = min;
-        lsbInput.max = msbInput.max = signInput.max = max;
+        lsbInput.min = msbInput.min = min;
+        lsbInput.max = msbInput.max = max;
         if (parseInt(lsbInput.value) > max) lsbInput.value = min;
         if (parseInt(msbInput.value) > max) msbInput.value = min;
-        if (parseInt(signInput.value) > max) signInput.value = '';
-        document.getElementById('bit-index-hint').textContent = `(0~${max} for ${format})`;
+        document.getElementById('bit-index-hint').textContent =
+            `유효 데이터의 마지막 비트입니다 (0~${max}). Signed가 Yes이면 진행 방향의 다음 비트가 부호 비트로 추가됩니다.`;
     }
     formatRadios.forEach(radio => {
         radio.addEventListener('change', updateBitIndexRange);
@@ -3725,7 +3734,7 @@ function showBitExtractorPopup() {
         const format = Array.from(formatRadios).find(r=>r.checked).value;
         let lsb = parseInt(lsbInput.value);
         let msb = parseInt(msbInput.value);
-        let signBit = signInput.value === '' ? null : parseInt(signInput.value);
+        const signed = signedSelect.value === 'yes';
         let lsbScale = parseFloat(lsbScaleInput.value);
         const newName = paramNameInput.value.trim();
         let min = 0, max = (format === '32bit') ? 31 : 15;
@@ -3735,8 +3744,9 @@ function showBitExtractorPopup() {
         if (isNaN(lsb) || isNaN(msb) || lsb < min || msb < min || lsb > max || msb > max) {
             alert(`LSB/MSB를 올바르게 입력하세요. (${min}~${max})`); return;
         }
-        if (signBit !== null && (isNaN(signBit) || signBit < min || signBit > max)) {
-            alert(`Sign Bit을 올바르게 입력하세요. (${min}~${max} 또는 비워두기)`); return;
+        const signBit = msb + (msb >= lsb ? 1 : -1);
+        if (signed && (signBit < min || signBit > max)) {
+            alert(`Signed=Yes일 때 MSB 다음 부호 비트(${signBit})가 범위 ${min}~${max} 안에 있어야 합니다.`); return;
         }
         if (isNaN(lsbScale) || lsbScale === 0) {
             alert('LSB Scale을 올바르게 입력하세요. (0이 아닌 실수)'); return;
@@ -3751,9 +3761,6 @@ function showBitExtractorPopup() {
         if (format === '16bit') {
             lsb = 15 - lsb;
             msb = 15 - msb;
-            if (signBit !== null) {
-                signBit = 15 - signBit;
-            }
         }
         
         // Generate 버튼을 Processing... 상태로 변경하고 점멸 애니메이션 적용
@@ -3771,7 +3778,7 @@ function showBitExtractorPopup() {
                 lsb: lsb,
                 msb: msb,
                 data_format: format,
-                sign_bit_index: signBit,
+                signed: signed,
                 lsb_scale: lsbScale,
                 parameter_name: newName
             })

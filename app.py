@@ -916,7 +916,12 @@ def create_bit_extracted_parameter_api():
         lsb = data.get('lsb')
         msb = data.get('msb')
         data_format = data.get('data_format', '32bit')
-        sign_bit_index = data.get('sign_bit_index')
+        signed = data.get('signed')
+        legacy_sign_bit_index = data.get('sign_bit_index')
+        if signed is None:
+            signed = legacy_sign_bit_index is not None
+        if not isinstance(signed, bool):
+            return jsonify({'error': 'signed must be true or false'}), 400
         lsb_scale = data.get('lsb_scale', 1.0)
         parameter_name = data.get('parameter_name')
         
@@ -935,10 +940,17 @@ def create_bit_extracted_parameter_api():
         if lsb < 0 or msb < 0 or lsb >= max_bits or msb >= max_bits:
             return jsonify({'error': f'Bit indices must be between 0 and {max_bits-1}'}), 400
         
-        # 부호 비트 인덱스 검증
-        if sign_bit_index is not None:
+        # Signed 모드는 MSB 다음 방향의 한 비트를 추가로 사용한다.
+        if signed:
+            direction = 1 if msb >= lsb else -1
+            sign_bit_index = msb + direction
             if sign_bit_index < 0 or sign_bit_index >= max_bits:
-                return jsonify({'error': f'Sign bit index must be between 0 and {max_bits-1}'}), 400
+                return jsonify({'error': (
+                    f'Signed extraction requires one bit beyond MSB; '
+                    f'calculated sign bit {sign_bit_index} is outside 0..{max_bits-1}'
+                )}), 400
+        else:
+            sign_bit_index = None
         
         # LSB와 MSB의 순서는 자유롭게 허용 (역순 추출 지원)
         
@@ -946,7 +958,7 @@ def create_bit_extracted_parameter_api():
         logger.info(f"  Source parameter: {source_parameter}")
         logger.info(f"  LSB: {lsb}, MSB: {msb}")
         logger.info(f"  Data format: {data_format}")
-        logger.info(f"  Sign bit index: {sign_bit_index}")
+        logger.info(f"  Signed: {signed}, sign bit index: {sign_bit_index}")
         logger.info(f"  LSB scale: {lsb_scale}")
         logger.info(f"  Parameter name: {parameter_name}")
         
@@ -956,7 +968,7 @@ def create_bit_extracted_parameter_api():
             lsb=lsb,
             msb=msb,
             data_format=data_format,
-            sign_bit_index=sign_bit_index,
+            signed=signed,
             lsb_scale=lsb_scale,
             parameter_name=parameter_name
         )
@@ -967,7 +979,7 @@ def create_bit_extracted_parameter_api():
             lsb=lsb,
             msb=msb,
             data_format=data_format,
-            sign_bit_index=sign_bit_index,
+            signed=signed,
             lsb_scale=lsb_scale
         )
         

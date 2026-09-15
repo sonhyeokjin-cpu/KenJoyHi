@@ -1361,12 +1361,12 @@
 
     <!-- FFT Analysis Popup -->
     <div id="fft-popup" class="popup" style="display: none;">
-        <div class="popup-content">
+        <div class="popup-content fft-modal">
             <div class="popup-header">
                 <h3>FFT Analysis</h3>
                 <button class="close-btn">&times;</button>
             </div>
-            <div id="fft-chart" style="width: 100%; height: 500px;"></div>
+            <div id="fft-chart" class="fft-chart-shell"></div>
         </div>
     </div>
 
@@ -1441,12 +1441,12 @@
 
     <!-- BIT Extractor Popup -->
     <div id="bit-extractor-popup" class="popup" style="display: none;">
-        <div class="popup-content">
-            <div class="popup-header">
+        <div class="popup-content bit-extractor-modal">
+            <div class="popup-header bit-extractor-header">
                 <h3>BIT Extractor</h3>
                 <button class="close-btn">&times;</button>
             </div>
-            <div class="bit-extractor-form">
+            <div class="bit-extractor-form bit-extractor-body">
                 <div class="form-group">
                     <label>Select Parameter (Single selection):</label>
                     <div id="bit-parameter-selection-list" class="parameter-selection-list">
@@ -1468,16 +1468,24 @@
                 </div>
                 <div class="form-group">
                     <label for="bit-lsb">LSB:</label>
-                    <input type="number" id="bit-lsb" min="0" max="31" value="0" style="width:60px;">
+                    <div class="bit-field-row">
+                        <input type="number" id="bit-lsb" min="0" max="31" value="0">
+                        <span class="bit-field-help">Bit 인덱스는 0부터 시작합니다 (0 ~ 15 또는 0 ~ 31 기준).</span>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="bit-msb">MSB:</label>
-                    <input type="number" id="bit-msb" min="0" max="31" value="0" style="width:60px;">
-                    <span id="bit-index-hint" style="font-size:0.95em;color:#888;margin-left:8px;">(0~31 for 32bit, 0~15 for 16bit, sign bit 포함)</span>
+                    <div class="bit-field-row">
+                        <input type="number" id="bit-msb" min="0" max="31" value="0">
+                        <span id="bit-index-hint" class="bit-field-help">유효 데이터의 마지막 비트입니다. Signed가 Yes이면 진행 방향의 다음 비트가 부호 비트로 추가됩니다.</span>
+                    </div>
                 </div>
                 <div class="form-group">
-                    <label for="bit-sign">Sign Bit (optional):</label>
-                    <input type="number" id="bit-sign" min="" max="" placeholder="Leave blank for unsigned" style="width:100px;">
+                    <label for="bit-signed">Sign Bit (optional):</label>
+                    <select id="bit-signed">
+                        <option value="no" selected>No</option>
+                        <option value="yes">Yes</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label for="bit-lsb-scale">LSB Scale:</label>
@@ -1492,12 +1500,12 @@
                     <button id="cancel-bit-extractor-btn" class="btn secondary">Cancel</button>
                     <button id="generate-bit-extractor-btn" class="btn primary">Generate</button>
                 </div>
-                <div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; border-left: 4px solid #2196F3;">
-                    <small style="color: #666; font-size: 0.9em;">
+                <div class="bit-tip-panel">
+                    <small>
                         <strong>💡 Tip:</strong> LSB, MSB를 자유롭게 입력할 수 있습니다.<br>
                         • LSB ≤ MSB: 비트를 순차적으로 추출 (예: LSB=3, MSB=7 → 3,4,5,6,7번 비트)<br>
                         • LSB > MSB: 비트를 역순으로 추출 (예: LSB=7, MSB=3 → 7,6,5,4,3번 비트를 역순으로)<br>
-                        <span style="color:#1976D2;font-weight:500;">Sign bit 반영 시, MSB Index입력범위에 포함되어야 합니다.</span>
+                        <span class="bit-tip-emphasis">Signed=Yes이면 MSB 다음 방향의 비트가 부호 비트로 자동 포함됩니다. 예: 1→10은 bit 11, 10→1은 bit 0.</span>
                     </small>
                 </div>
             </div>
