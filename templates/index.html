@@ -1081,12 +1081,8 @@
                 </div>
             </div>
             <div class="sidebar-tabs">
-                <div class="tab active" data-tab="file">
-                    <span class="icon" aria-hidden="true">▣</span> Project
-                </div>
-                <div class="tab" data-tab="plot">
-                    <span class="icon" aria-hidden="true">⌁</span> Channels
-                </div>
+                <div class="tab active" data-tab="file">Data Base</div>
+                <div class="tab" data-tab="plot">Parameters</div>
             </div>
             
             <div class="tab-content">
@@ -1109,11 +1105,11 @@
                 <div class="tab-pane" id="plot-tab">
                     <div class="parameter-search" role="search">
                         <span class="search-icon" aria-hidden="true">⌕</span>
-                        <input id="parameter-search-input" type="search" placeholder="Search channel or description" autocomplete="off" aria-label="Search channels">
-                        <button id="clear-parameter-search" type="button" aria-label="Clear channel search">×</button>
+                        <input id="parameter-search-input" type="search" placeholder="Search parameter or description" autocomplete="off" aria-label="Search parameters">
+                        <button id="clear-parameter-search" type="button" aria-label="Clear parameter search">×</button>
                     </div>
                     <div class="parameter-list-meta">
-                        <span>AVAILABLE CHANNELS</span>
+                        <span>AVAILABLE PARAMETERS</span>
                         <span id="parameter-result-count">0</span>
                     </div>
                     <!-- Toggle Controls -->
@@ -1666,7 +1662,7 @@
             const editor = monaco.editor.create(document.getElementById('monaco-editor'), {
                 value: '# Python 계산식을 입력하세요.\n# 왼쪽 목록에서 사용할 파라미터를 클릭하세요.\n# 계산 결과는 반드시 result 변수에 대입하세요.\n\nresult = None',
                 language: 'python',
-                theme: 'vs',
+                theme: 'vs-dark',
                 automaticLayout: true,
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false,
