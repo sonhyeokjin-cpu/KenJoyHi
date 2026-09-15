@@ -146,7 +146,7 @@ def process_csv_file(filepath, file_type='regular'):
         # Pass 2 reads every data column together. Limit cells per chunk so wide
         # CSV files stay memory-bounded while the physical file is scanned once.
         target_cells = 2_000_000
-        chunk_rows = max(10_000, min(250_000, target_cells // len(all_columns)))
+        chunk_rows = max(1_000, min(250_000, target_cells // len(all_columns)))
         logger.info(
             f"Streaming {len(data_cols)} CSV channels in one pass "
             f"({chunk_rows} rows per chunk)."
