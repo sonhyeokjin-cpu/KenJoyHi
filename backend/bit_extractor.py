@@ -175,8 +175,8 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
         if sign_bit_index is not None:
             if sign_bit_index != max(lsb, msb):
                 raise ValueError("sign_bit_index must be the selected MSB")
-            sign = (extracted_values >= (1 << (bit_width - 1)))
-            extracted_values[sign] -= sign.astype(np.int64) * (1 << bit_width)
+            sign_mask = extracted_values >= (1 << (bit_width - 1))
+            extracted_values[sign_mask] -= float(1 << bit_width)
         extracted_values *= float(lsb_scale)
         extracted_values[~finite_mask] = np.nan
         
