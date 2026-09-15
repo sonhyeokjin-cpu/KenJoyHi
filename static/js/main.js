@@ -470,7 +470,7 @@ fileInput.addEventListener('change', async (e) => {
     formData.append('file', file);
 
     try {
-        uploadStatus.textContent = 'Uploading File....';
+        uploadStatus.textContent = 'Uploading File…';
         uploadStatus.className = 'uploading';
         
         const response = await fetch('/api/upload', {
@@ -563,7 +563,7 @@ uploadFixedWingBtn.addEventListener('click', () => {
         formData.append('file_type', 'fixed_wing'); // Fixed-wing 파일임을 표시
 
         try {
-            uploadStatus.textContent = 'Uploading Fixed-wing File....';
+            uploadStatus.textContent = 'Uploading Fixed-wing File…';
             uploadStatus.className = 'uploading';
             
             const response = await fetch('/api/upload', {
@@ -1511,10 +1511,16 @@ function showContextMenu(event, chartId) {
     const menu = contextMenu;
     menu.innerHTML = ''; // Clear previous items
 
-    const createMenuItem = (text, onClick, enabled = true) => {
+    const createMenuItem = (text, onClick, enabled = true, seriesColor = null) => {
         const item = document.createElement('div');
         item.className = 'context-menu-item';
         item.textContent = text;
+
+        if (seriesColor) {
+            item.classList.add('parameter-menu-item');
+            item.style.setProperty('--parameter-menu-color', seriesColor);
+        }
+
         if (enabled) {
             item.onclick = (e) => {
                 e.stopPropagation();
@@ -1522,8 +1528,8 @@ function showContextMenu(event, chartId) {
                 onClick();
             };
         } else {
-            item.style.color = '#aaa';
-            item.style.cursor = 'default';
+            item.classList.add('disabled');
+            item.setAttribute('aria-disabled', 'true');
         }
         return item;
     };
@@ -1535,9 +1541,9 @@ function showContextMenu(event, chartId) {
     divider.className = 'context-menu-divider';
     menu.appendChild(divider);
 
-    menu.appendChild(createMenuItem('Delete Param 1', () => deleteParameter(chartId, 0), chart.parameters.length >= 1));
-    menu.appendChild(createMenuItem('Delete Param 2', () => deleteParameter(chartId, 1), chart.parameters.length >= 2));
-    menu.appendChild(createMenuItem('Delete Param 3', () => deleteParameter(chartId, 2), chart.parameters.length >= 3));
+    menu.appendChild(createMenuItem('Delete Param 1', () => deleteParameter(chartId, 0), chart.parameters.length >= 1, baseSeriesColors[0]));
+    menu.appendChild(createMenuItem('Delete Param 2', () => deleteParameter(chartId, 1), chart.parameters.length >= 2, baseSeriesColors[1]));
+    menu.appendChild(createMenuItem('Delete Param 3', () => deleteParameter(chartId, 2), chart.parameters.length >= 3, baseSeriesColors[2]));
 
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
