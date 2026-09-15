@@ -188,7 +188,7 @@ def fft_channel(payload):
     dt = np.diff(time)
     median_dt = float(np.median(dt))
     if median_dt <= 0 or np.any(np.abs(dt - median_dt) > median_dt * 0.01):
-        raise ValueError('FFT requires a nearly uniform time axis (within 1%)')
+        raise ValueError('FFT 분석 오류: 샘플링 간격 오차가 1%를 초과했습니다. 등간격 샘플링 구간을 선택하거나 구간을 좁혀 다시 시도하세요.')
     count = min(values.size, 262_144)
     size = 1 << int(np.floor(np.log2(count)))
     values = values[:size] - np.mean(values[:size])
