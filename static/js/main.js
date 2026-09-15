@@ -2251,7 +2251,8 @@ async function performFFTAnalysis(chartId) {
         fftPopup.style.display = 'flex';
     } catch (error) {
         console.error('Error performing FFT analysis:', error);
-        alert('Error performing FFT analysis: ' + error.message);
+        const message = String(error.message || '알 수 없는 오류');
+        alert(message.startsWith('FFT 분석 오류:') ? message : `FFT 분석 오류: ${message}`);
     }
 }
 
@@ -2306,7 +2307,7 @@ function calculateFFT(time, values) {
     for (let i = 1; i < t.length; i++) dts.push(t[i] - t[i - 1]);
     const dt = dts.slice().sort((a, b) => a - b)[Math.floor(dts.length / 2)];
     if (!(dt > 0) || dts.some(d => Math.abs(d - dt) > dt * 0.01)) {
-        throw new Error('FFT requires a nearly uniform time axis');
+        throw new Error('FFT 분석 오류: 샘플링 간격 오차가 1%를 초과했습니다. 등간격 샘플링 구간을 선택하거나 구간을 좁혀 다시 시도하세요.');
     }
     // Keep browser work bounded and use a Hann window to reduce leakage.
     const sampleCount = Math.min(x.length, 262144);
@@ -3163,8 +3164,8 @@ scaleBtn?.addEventListener('click', () => {
     openInspector('scale');
 });
 
-// Apply scale changes
-applyScaleBtn?.addEventListener('click', () => {
+// Apply X and Y scales as one ordered operation.
+applyScaleBtn?.addEventListener('click', async () => {
     const xMin = parseFloat(xMinInput.value);
     const xMax = parseFloat(xMaxInput.value);
     const yMin = parseFloat(yMinInput.value);
@@ -3180,23 +3181,37 @@ applyScaleBtn?.addEventListener('click', () => {
         return;
     }
 
-    // Apply X scale to ALL charts (common X-axis scale)
-    charts.forEach(chart => {
-        if (chart && chart.plot) {
-            chart.plot.setScale('x', { min: xMin, max: xMax });
-        }
-    });
+    // Capture selection before X-axis synchronization can trigger chart updates.
+    const selectedChartIds = Array.from(document.querySelectorAll('.chart-container.selected'))
+        .map(container => container.id);
+    if (!selectedChartIds.length) {
+        alert('Please select at least one chart for Y-axis scale');
+        return;
+    }
 
-    // Apply Y scale only to selected charts
-    const selectedCharts = document.querySelectorAll('.chart-container.selected');
-    selectedCharts.forEach(container => {
-        const chart = charts.find(c => c.id === container.id);
-        if (chart && chart.plot) {
-            chart.plot.setScale('y', { min: yMin, max: yMax });
-        }
-    });
+    const requestedRange = { min: xMin, max: xMax };
+    applyScaleBtn.disabled = true;
 
-    showNotification('Scale applied to the selected chart set.');
+    try {
+        // Populated charts are synchronized and, only when necessary, reloaded.
+        // Empty charts still receive the same shared X range.
+        charts.filter(chart => !chart.parameters?.length)
+            .forEach(chart => setChartXRange(chart, requestedRange));
+        await synchronizeChartRange(requestedRange);
+
+        // Data reload may auto-scale Y, so apply the requested Y range last.
+        selectedChartIds.forEach(chartId => {
+            const chart = charts.find(item => item.id === chartId);
+            chart?.plot?.setScale('y', { min: yMin, max: yMax });
+        });
+
+        showNotification('X/Y scales applied together.');
+    } catch (error) {
+        console.error('Error applying chart scale:', error);
+        showNotification(`Scale 적용 오류: ${error.message}`, 'error');
+    } finally {
+        applyScaleBtn.disabled = false;
+    }
 });
 
 resetYScaleBtn?.addEventListener('click', () => {
