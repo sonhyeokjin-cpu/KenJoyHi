@@ -92,6 +92,24 @@ def apply_sign_bit(value, bit_width):
     else:
         return value
 
+
+def resolve_sign_bit_index(lsb, msb, data_format='32bit'):
+    """Return the bit immediately beyond ``msb`` in the LSB→MSB direction."""
+    max_bits = 32 if data_format == '32bit' else 16
+    if data_format not in ('32bit', '16bit'):
+        raise ValueError("data_format must be '32bit' or '16bit'")
+    if not (0 <= lsb < max_bits and 0 <= msb < max_bits):
+        raise ValueError(f"Bit indexes must be in 0..{max_bits - 1}")
+
+    direction = 1 if msb >= lsb else -1
+    sign_bit_index = msb + direction
+    if not 0 <= sign_bit_index < max_bits:
+        raise ValueError(
+            f"Signed extraction needs one sign bit beyond MSB in the LSB-to-MSB "
+            f"direction; calculated sign bit {sign_bit_index} is outside 0..{max_bits - 1}"
+        )
+    return sign_bit_index
+
 def apply_lsb_scale(value, lsb_scale):
     """
     LSB 스케일을 적용합니다.
@@ -118,8 +136,9 @@ def apply_lsb_scale(value, lsb_scale):
         logger.error(traceback.format_exc())
         raise
 
-def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bit', 
-                                 sign_bit_index=None, lsb_scale=1.0, parameter_name=None):
+def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bit',
+                                 sign_bit_index=None, lsb_scale=1.0, parameter_name=None,
+                                 signed=None):
     """
     소스 파라미터에서 비트를 추출하여 새로운 파라미터를 생성합니다.
     
@@ -134,7 +153,9 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
     data_format : str
         데이터 포맷 ('32bit' 또는 '16bit')
     sign_bit_index : int, optional
-        부호 비트 인덱스 (None이면 부호 없음)
+        이전 API 호환용 값. 값이 있으면 signed=True로 취급합니다.
+    signed : bool, optional
+        True이면 LSB→MSB 진행 방향에서 MSB 바로 다음 비트를 부호 비트로 포함합니다.
     lsb_scale : float
         LSB 스케일 값
     parameter_name : str, optional
@@ -147,7 +168,9 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
     """
     try:
         logger.info(f"Creating bit extracted parameter from {source_parameter}")
-        logger.info(f"Parameters: lsb={lsb}, msb={msb}, format={data_format}, sign_bit={sign_bit_index}, scale={lsb_scale}, parameter_name={parameter_name}")
+        signed = (sign_bit_index is not None) if signed is None else bool(signed)
+        effective_sign_bit = resolve_sign_bit_index(lsb, msb, data_format) if signed else None
+        logger.info(f"Parameters: lsb={lsb}, msb={msb}, format={data_format}, signed={signed}, sign_bit={effective_sign_bit}, scale={lsb_scale}, parameter_name={parameter_name}")
         
         # 소스 데이터 가져오기
         source_data = get_timeseries_data(source_parameter, -np.inf, np.inf)
@@ -170,11 +193,10 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
             'processed_points': total_points,
             'progress_percentage': 100.0
         }
-        extracted_values = extract_bits_array(value_data, lsb, msb, data_format).astype(np.float64)
-        bit_width = abs(msb - lsb) + 1
-        if sign_bit_index is not None:
-            if sign_bit_index != max(lsb, msb):
-                raise ValueError("sign_bit_index must be the selected MSB")
+        extraction_msb = effective_sign_bit if signed else msb
+        extracted_values = extract_bits_array(value_data, lsb, extraction_msb, data_format).astype(np.float64)
+        bit_width = abs(extraction_msb - lsb) + 1
+        if signed:
             sign_mask = extracted_values >= (1 << (bit_width - 1))
             extracted_values[sign_mask] -= float(1 << bit_width)
         extracted_values *= float(lsb_scale)
@@ -189,8 +211,8 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
             max_bit = max(lsb, msb)
             direction_suffix = '_rev' if lsb > msb else ''
             param_suffix = f"_bit{min_bit}_{max_bit}{direction_suffix}"
-            if sign_bit_index is not None:
-                param_suffix += f"_sign{sign_bit_index}"
+            if signed:
+                param_suffix += f"_sign{effective_sign_bit}"
             if lsb_scale != 1.0:
                 param_suffix += f"_scale{lsb_scale}"
             new_parameter_name = f"{source_parameter}{param_suffix}"
@@ -213,8 +235,8 @@ def create_bit_extracted_parameter(source_parameter, lsb, msb, data_format='32bi
         logger.error(traceback.format_exc())
         raise
 
-def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit', 
-                          sign_bit_index=None, lsb_scale=1.0):
+def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit',
+                          sign_bit_index=None, lsb_scale=1.0, signed=None):
     """
     BIT Extractor 정보를 반환합니다.
     
@@ -239,9 +261,13 @@ def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit',
         BIT Extractor 정보
     """
     try:
+        signed = (sign_bit_index is not None) if signed is None else bool(signed)
+        effective_sign_bit = resolve_sign_bit_index(lsb, msb, data_format) if signed else None
+        extraction_msb = effective_sign_bit if signed else msb
+
         # 실제 비트 범위 계산
-        start_bit = min(lsb, msb)
-        end_bit = max(lsb, msb)
+        start_bit = min(lsb, extraction_msb)
+        end_bit = max(lsb, extraction_msb)
         is_reverse = lsb > msb
         
         # 비트 범위 설명
@@ -257,9 +283,11 @@ def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit',
             formula = f"extract_bits(value, {lsb}, {msb})"
         
         # 부호 비트 적용 설명
-        if sign_bit_index is not None:
-            formula += f" → apply_sign_bit(extracted, {sign_bit_index})"
-            bit_range_desc += f", 부호 비트: {sign_bit_index}"
+        if signed:
+            bit_width = abs(extraction_msb - lsb) + 1
+            formula = formula.replace(f", {msb})", f", {effective_sign_bit})")
+            formula += f" → apply_sign_bit(extracted, {bit_width})"
+            bit_range_desc += f", 부호 비트: {effective_sign_bit} (MSB 다음 비트)"
         
         # LSB 스케일 적용 설명
         if lsb_scale != 1.0:
@@ -276,7 +304,8 @@ def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit',
                 'data_format': data_format,
                 'is_reverse': is_reverse,
                 'actual_range': f"{start_bit}-{end_bit}",
-                'sign_bit_index': sign_bit_index,
+                'signed': signed,
+                'sign_bit_index': effective_sign_bit,
                 'lsb_scale': lsb_scale
             }
         }
@@ -289,7 +318,8 @@ def get_bit_extractor_info(source_parameter, lsb, msb, data_format='32bit',
                 'lsb': lsb,
                 'msb': msb,
                 'data_format': data_format,
-                'sign_bit_index': sign_bit_index,
+                'signed': signed,
+                'sign_bit_index': effective_sign_bit,
                 'lsb_scale': lsb_scale,
                 'is_reverse': is_reverse,
                 'actual_bit_range': f"{start_bit}-{end_bit}"
