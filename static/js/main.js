@@ -6,9 +6,12 @@ let charts = [];
 let parameters = [];
 let updateTimeout = null;  // 디바운스를 위한 타임아웃 변수
 let fftChart = null;  // FFT 차트 인스턴스
+let fftResizeHandler = null;
+let suppressChartRangeReload = false;
 let scatterChart = null;  // Scatter 차트 인스턴스
 let isRestoringLayout = false; // 차트 레이아웃 복원 중인지 여부 플래그
 let isFixedScale = false; // Fixed Scale 토글 상태
+let isRelativeX = localStorage.getItem('wavelab-relative-x') === 'true';
 let isShowDescription = false; // Show Description 토글 상태
 let lineAlphaPercent = 0; // 라인 투명도 (% 0~100)
 let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linear';
@@ -81,6 +84,37 @@ async function showChannelQuality() {
 
 // 기본 라인 색상 (파라미터 시리즈용)
 const baseSeriesColors = ['#2196F3', '#FF5722', '#4CAF50'];
+
+function relativeXOrigin(plot) {
+    const minimum = Number(plot?.scales?.x?.min);
+    return isRelativeX && Number.isFinite(minimum) ? minimum : 0;
+}
+
+function formatXAxisValues(plot, ticks) {
+    if (!ticks || ticks.length === 0) return ticks;
+    const displayed = ticks.map(value => Number(value) - relativeXOrigin(plot));
+    const interval = displayed.length > 1 ? Math.abs(displayed[1] - displayed[0]) : 0;
+    let decimals = 0;
+    if (interval > 0 && interval < 0.1) decimals = 3;
+    else if (interval < 1) decimals = 2;
+    else if (interval < 10) decimals = 1;
+    return displayed.map(value => {
+        const normalized = Math.abs(value) < Math.pow(10, -Math.max(decimals, 1)) ? 0 : value;
+        return normalized.toFixed(decimals);
+    });
+}
+
+function formatCursorTime(plot, value) {
+    if (value == null || !Number.isFinite(Number(value))) return '--';
+    const displayed = Number(value) - relativeXOrigin(plot);
+    return displayed.toFixed(3);
+}
+
+function redrawRelativeXAxis() {
+    charts.forEach(chart => {
+        if (typeof chart.plot?.redraw === 'function') chart.plot.redraw(false, false);
+    });
+}
 
 function hexToRgba(hex, alpha) {
     const sanitized = hex.replace('#', '');
@@ -1435,21 +1469,12 @@ function createChart() {
                 labelSize: 0,
                 labelGap: 0,
                 padding: 0,
-                values: (u, ticks) => {
-                    if (!ticks || ticks.length < 2) return ticks;
-                    const interval = Math.abs(ticks[1] - ticks[0]);
-                    let decimals = 0;
-                    if (interval < 0.1) decimals = 3;
-                    else if (interval < 1) decimals = 2;
-                    else if (interval < 10) decimals = 1;
-                    else decimals = 0;
-                    return ticks.map(v => v.toFixed(decimals));
-                }
+                values: formatXAxisValues
             },
             { scale: 'y', label: '', stroke: '#2196F3', size: 40, labelSize: 0, labelGap: 0, padding: 0 }
         ],
         series: [
-            { label: 'Time' },
+            { label: 'Time', value: formatCursorTime },
             { label: '', stroke: '#2196F3', scale: 'y' },
             { label: '', stroke: '#FF5722', scale: 'y' },
             { label: '', stroke: '#4CAF50', scale: 'y' }
@@ -1485,6 +1510,7 @@ function createChart() {
         isUpdating: false,
         isRestoringZoom: false,
         dataRequestVersion: 0,
+        manualYScale: null,
         loadedRange: null,
         initialScale: null,
         viewRange: null,
@@ -1896,7 +1922,12 @@ function renderChartData(chart, parameterList, datasets, range = null) {
         // Set X before resetting Y so uPlot computes an autoscale from the
         // visible data range in the same render transaction.
         if (displayRange) chart.plot.setScale('x', displayRange);
-        if (!isFixedScale) chart.plot.setScale('y', { min: null, max: null });
+        const manualYRange = validTimeRange(chart.manualYScale?.min, chart.manualYScale?.max);
+        if (manualYRange) {
+            chart.plot.setScale('y', manualYRange);
+        } else if (!isFixedScale) {
+            chart.plot.setScale('y', { min: null, max: null });
+        }
         if (typeof chart.plot.redraw === 'function') chart.plot.redraw();
     } finally {
         chart.suppressRangeReload = false;
@@ -1912,7 +1943,16 @@ async function synchronizeChartRange(range) {
     const normalized = validTimeRange(range?.min, range?.max);
     if (!normalized) return;
     const targets = charts.filter(chart => chart.parameters?.length && chart.plot);
-    targets.forEach(chart => setChartXRange(chart, normalized));
+    targets.forEach(chart => {
+        clearTimeout(chart.updateTimeout);
+        chart.updateTimeout = null;
+    });
+    suppressChartRangeReload = true;
+    try {
+        targets.forEach(chart => setChartXRange(chart, normalized));
+    } finally {
+        suppressChartRangeReload = false;
+    }
     await Promise.all(targets.map(chart => {
         const sameParameters = chart.renderedParameters?.length === chart.parameters.length &&
             chart.renderedParameters?.every((parameter, index) => parameter === chart.parameters[index]);
@@ -1940,7 +1980,7 @@ function scheduleChartRangeReload(chartId, plot) {
     const chart = charts.find(item => item.id === chartId);
     const min = Number(plot?.scales?.x?.min);
     const max = Number(plot?.scales?.x?.max);
-    if (!chart?.parameters?.length || chart.suppressRangeReload ||
+    if (!chart?.parameters?.length || suppressChartRangeReload || chart.suppressRangeReload ||
         chart.isUpdating || !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
 
     const requestedRange = { min, max };
@@ -2244,11 +2284,10 @@ async function performFFTAnalysis(chartId) {
             parameter: chart.parameters[0], start, end
         });
         
-        // FFT 차트 생성
-        createFFTChart(fftResult.frequencies, fftResult.magnitudes, chart.parameters[0]);
-        
-        // 팝업 표시
+        // 먼저 팝업을 표시해야 실제 가용 크기를 기준으로 차트를 계산할 수 있다.
         fftPopup.style.display = 'flex';
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        createFFTChart(fftResult.frequencies, fftResult.magnitudes, chart.parameters[0]);
     } catch (error) {
         console.error('Error performing FFT analysis:', error);
         const message = String(error.message || '알 수 없는 오류');
@@ -2344,13 +2383,20 @@ function createFFTChart(frequencies, magnitudes, parameter) {
         fftChart.destroy();
     }
     
-    // 차트 컨테이너 크기 확인
-    const containerWidth = fftChartElement.offsetWidth || 800;
-    const containerHeight = 400;
+    const getPlotSize = () => {
+        const style = getComputedStyle(fftChartElement);
+        const horizontalPadding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0);
+        const verticalPadding = parseFloat(style.paddingTop || 0) + parseFloat(style.paddingBottom || 0);
+        return {
+            width: Math.max(320, fftChartElement.clientWidth - horizontalPadding),
+            height: Math.max(180, fftChartElement.clientHeight - verticalPadding)
+        };
+    };
+    const initialSize = getPlotSize();
     
     const opts = {
-        width: containerWidth,
-        height: containerHeight,
+        width: initialSize.width,
+        height: initialSize.height,
         title: `FFT Analysis - ${parameter}`,
         cursor: {
             show: true,
@@ -2404,38 +2450,23 @@ function createFFTChart(frequencies, magnitudes, parameter) {
     };
     
     try {
-        // 차트 생성 전에 컨테이너가 보이도록 설정
         fftChartElement.style.display = 'block';
         fftChartElement.style.width = '100%';
-        fftChartElement.style.height = '400px';
         
         fftChart = new uPlot(opts, [frequencies, magnitudes], fftChartElement);
         console.log('FFT chart created successfully');
-        
-        // 차트 생성 후 크기 조정
-        setTimeout(() => {
-            if (fftChart) {
-                fftChart.setSize({
-                    width: fftChartElement.offsetWidth,
-                    height: containerHeight
-                });
-            }
-        }, 0);
     } catch (error) {
         console.error('Error creating FFT chart:', error);
     }
     
-    // 창 크기 변경 시 차트 크기 조정
-    const resizeHandler = () => {
-        if (fftChart) {
-            fftChart.setSize({
-                width: fftChartElement.offsetWidth,
-                height: containerHeight
-            });
-        }
+    // 동일 핸들러가 누적되지 않도록 교체하고 실제 내부 가용 크기로 맞춘다.
+    if (fftResizeHandler) window.removeEventListener('resize', fftResizeHandler);
+    fftResizeHandler = () => {
+        if (!fftChart) return;
+        const size = getPlotSize();
+        fftChart.setSize(size);
     };
-    
-    window.addEventListener('resize', resizeHandler);
+    window.addEventListener('resize', fftResizeHandler);
 }
 
 // 버튼 상태 업데이트 함수 수정
@@ -2542,6 +2573,10 @@ document.querySelector('#fft-popup .close-btn').addEventListener('click', () => 
     if (fftChart) {
         fftChart.destroy();
         fftChart = null;
+    }
+    if (fftResizeHandler) {
+        window.removeEventListener('resize', fftResizeHandler);
+        fftResizeHandler = null;
     }
 });
 
@@ -3190,6 +3225,11 @@ applyScaleBtn?.addEventListener('click', async () => {
     }
 
     const requestedRange = { min: xMin, max: xMax };
+    const requestedYRange = { min: yMin, max: yMax };
+    selectedChartIds.forEach(chartId => {
+        const chart = charts.find(item => item.id === chartId);
+        if (chart) chart.manualYScale = { ...requestedYRange };
+    });
     applyScaleBtn.disabled = true;
 
     try {
@@ -3202,7 +3242,7 @@ applyScaleBtn?.addEventListener('click', async () => {
         // Data reload may auto-scale Y, so apply the requested Y range last.
         selectedChartIds.forEach(chartId => {
             const chart = charts.find(item => item.id === chartId);
-            chart?.plot?.setScale('y', { min: yMin, max: yMax });
+            chart?.plot?.setScale('y', requestedYRange);
         });
 
         showNotification('X/Y scales applied together.');
@@ -3218,6 +3258,7 @@ resetYScaleBtn?.addEventListener('click', () => {
     const selected = document.querySelectorAll('.chart-container.selected');
     selected.forEach(container => {
         const chart = charts.find(item => item.id === container.id);
+        if (chart) chart.manualYScale = null;
         chart?.plot?.setScale('y', { min: null, max: null });
     });
     if (selected.length) showNotification('Selected chart Y axes restored to auto scale.');
@@ -5093,6 +5134,17 @@ function setupToggleEventListeners() {
             isFixedScale = this.checked;
             console.log('Fixed Scale toggle:', isFixedScale);
             applyFixedScaleToAllCharts();
+        });
+    }
+
+    // Relative X 토글: 원본/조회 시간은 유지하고 표시값만 현재 구간 시작 기준으로 변환
+    const relativeXToggle = document.getElementById('relative-x-toggle');
+    if (relativeXToggle) {
+        relativeXToggle.checked = isRelativeX;
+        relativeXToggle.addEventListener('change', function() {
+            isRelativeX = this.checked;
+            localStorage.setItem('wavelab-relative-x', String(isRelativeX));
+            redrawRelativeXAxis();
         });
     }
 

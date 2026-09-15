@@ -2789,13 +2789,20 @@ th {
 
 /* FFT workspace modal ------------------------------------------------------ */
 #fft-popup {
+    padding: 8px;
+    box-sizing: border-box;
     background: rgba(5, 11, 21, 0.78);
     backdrop-filter: blur(3px);
 }
 
 #fft-popup .popup-content {
-    width: min(960px, 92vw);
+    width: min(960px, calc(100vw - 16px));
+    height: min(720px, calc(100vh - 16px));
     max-width: 960px;
+    max-height: calc(100vh - 16px);
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     padding: 0;
     border: 1px solid #344a62;
     border-radius: var(--radius-md);
@@ -2805,7 +2812,8 @@ th {
 }
 
 #fft-popup .popup-header {
-    min-height: 58px;
+    min-height: 52px;
+    flex: 0 0 52px;
     margin: 0;
     padding: 0 18px;
     border-bottom: 1px solid #26394f;
@@ -2837,9 +2845,14 @@ th {
 }
 
 #fft-chart {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0;
+    flex: 1 1 auto;
     box-sizing: border-box;
-    padding: 16px;
+    padding: 14px 16px 18px;
     background: #ffffff;
+    overflow: hidden;
 }
 
 #fft-chart > .uplot {
