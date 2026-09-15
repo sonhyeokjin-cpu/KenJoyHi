@@ -11,6 +11,7 @@ let suppressChartRangeReload = false;
 let scatterChart = null;  // Scatter 차트 인스턴스
 let isRestoringLayout = false; // 차트 레이아웃 복원 중인지 여부 플래그
 let isFixedScale = false; // Fixed Scale 토글 상태
+let isRelativeX = localStorage.getItem('wavelab-relative-x') === 'true';
 let isShowDescription = false; // Show Description 토글 상태
 let lineAlphaPercent = 0; // 라인 투명도 (% 0~100)
 let alignmentPolicy = localStorage.getItem('wavelab-alignment-policy') || 'linear';
@@ -83,6 +84,37 @@ async function showChannelQuality() {
 
 // 기본 라인 색상 (파라미터 시리즈용)
 const baseSeriesColors = ['#2196F3', '#FF5722', '#4CAF50'];
+
+function relativeXOrigin(plot) {
+    const minimum = Number(plot?.scales?.x?.min);
+    return isRelativeX && Number.isFinite(minimum) ? minimum : 0;
+}
+
+function formatXAxisValues(plot, ticks) {
+    if (!ticks || ticks.length === 0) return ticks;
+    const displayed = ticks.map(value => Number(value) - relativeXOrigin(plot));
+    const interval = displayed.length > 1 ? Math.abs(displayed[1] - displayed[0]) : 0;
+    let decimals = 0;
+    if (interval > 0 && interval < 0.1) decimals = 3;
+    else if (interval < 1) decimals = 2;
+    else if (interval < 10) decimals = 1;
+    return displayed.map(value => {
+        const normalized = Math.abs(value) < Math.pow(10, -Math.max(decimals, 1)) ? 0 : value;
+        return normalized.toFixed(decimals);
+    });
+}
+
+function formatCursorTime(plot, value) {
+    if (value == null || !Number.isFinite(Number(value))) return '--';
+    const displayed = Number(value) - relativeXOrigin(plot);
+    return displayed.toFixed(3);
+}
+
+function redrawRelativeXAxis() {
+    charts.forEach(chart => {
+        if (typeof chart.plot?.redraw === 'function') chart.plot.redraw(false, false);
+    });
+}
 
 function hexToRgba(hex, alpha) {
     const sanitized = hex.replace('#', '');
@@ -1437,21 +1469,12 @@ function createChart() {
                 labelSize: 0,
                 labelGap: 0,
                 padding: 0,
-                values: (u, ticks) => {
-                    if (!ticks || ticks.length < 2) return ticks;
-                    const interval = Math.abs(ticks[1] - ticks[0]);
-                    let decimals = 0;
-                    if (interval < 0.1) decimals = 3;
-                    else if (interval < 1) decimals = 2;
-                    else if (interval < 10) decimals = 1;
-                    else decimals = 0;
-                    return ticks.map(v => v.toFixed(decimals));
-                }
+                values: formatXAxisValues
             },
             { scale: 'y', label: '', stroke: '#2196F3', size: 40, labelSize: 0, labelGap: 0, padding: 0 }
         ],
         series: [
-            { label: 'Time' },
+            { label: 'Time', value: formatCursorTime },
             { label: '', stroke: '#2196F3', scale: 'y' },
             { label: '', stroke: '#FF5722', scale: 'y' },
             { label: '', stroke: '#4CAF50', scale: 'y' }
@@ -5111,6 +5134,17 @@ function setupToggleEventListeners() {
             isFixedScale = this.checked;
             console.log('Fixed Scale toggle:', isFixedScale);
             applyFixedScaleToAllCharts();
+        });
+    }
+
+    // Relative X 토글: 원본/조회 시간은 유지하고 표시값만 현재 구간 시작 기준으로 변환
+    const relativeXToggle = document.getElementById('relative-x-toggle');
+    if (relativeXToggle) {
+        relativeXToggle.checked = isRelativeX;
+        relativeXToggle.addEventListener('change', function() {
+            isRelativeX = this.checked;
+            localStorage.setItem('wavelab-relative-x', String(isRelativeX));
+            redrawRelativeXAxis();
         });
     }
 
